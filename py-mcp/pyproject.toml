@@ -1,0 +1,25 @@
+[project]
+name = "dsh-memory-journal"
+version = "0.0.1"
+description = "日记式长期记忆 MCP server：按用户明确要求做精确检索/写入，按月归档并生成月度回顾与 DREAMS.md 小结。"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "mcp>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[project.scripts]
+dsh-memory-journal = "dsh_memory_journal.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dsh_memory_journal"]

@@ -1,0 +1,11 @@
+# dsh-memory-journal 本体插件：注册 USER.md/MEMORY.md 的自动注入，以及本地
+# 查看/编辑用的 loopback-only HTTP API。
+#
+# 默认 enabled: false——装完之后需要显式改成 true（或在更细粒度的
+# workspace/会话 config 里覆盖）才会生效，本插件不会对任何特定上游插件
+# （例如某个 IM 接入插件）做特殊判断。
+- insert:
+    - id: memory-journal
+      name: dsh-memory-journal
+      config:
+        enabled: false

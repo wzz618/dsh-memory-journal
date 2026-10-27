@@ -1,0 +1,13 @@
+node_modules/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Never let a local test run against the real default data directory leak
+# into a commit — tests use tmp_path/mkdtemp and should never need this, but
+# this is a guard in case DSH_MEMORY_JOURNAL_DATA_DIR ever gets pointed here
+# by mistake during development.
+.dsh-memory-journal/

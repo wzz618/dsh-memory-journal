@@ -1,0 +1,34 @@
+# 一次性接入 dsh-memory-journal 的完整示例：js-shell 本体插件 + 指向 py-mcp 的
+# 通用 MCP 客户端桥接（@deepseek-ai/dsh-mcp-client，和官方 docs/user/guide/mcp-memory
+# 文档里 Memorix/MCP Reference Memory/Engram 的接入方式一致）。
+#
+# 用法：
+#   npm install -g dsh-memory-journal         # 或在 js-shell/ 下 npm link 走本地源码
+#   pip install dsh-memory-journal            # 提供 `dsh-memory-journal` 可执行文件（py-mcp）
+#   dsh web --patch "$PWD/examples/dsh-memory-journal.cordis.yml"
+#
+# 要长期生效，把下面两条 insert 合并进
+# $DSH_HOME/profiles/<profile>/cordis.patch.yml 或 $DSH_HOME/cordis.patch.yml。
+#
+# enabled: false 是故意的默认值——装完之后需要显式对你要用的那个
+# workspace/会话打开，本插件不会对任何特定上游插件（例如某个 IM 接入插件）
+# 做特殊判断，见 README「已知限制」。
+- insert:
+    - id: memory-journal
+      name: dsh-memory-journal
+      config:
+        enabled: true
+    - id: memory-journal-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: memory-journal
+        transport: stdio
+        command: dsh-memory-journal
+        args: []
+        # js-shell 和 py-mcp 必须指向同一个记忆目录。两边都默认用
+        # ~/.dsh-memory-journal，不覆盖就是一致的；如果上面
+        # memory-journal 插件的 config.dataDir 改了，这里也要加
+        # DSH_MEMORY_JOURNAL_DATA_DIR 指向同一个路径，否则两边会读写
+        # 不同的文件。
+        env: {}
+        cwd: !!js process.cwd()
