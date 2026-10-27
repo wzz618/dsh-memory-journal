@@ -38,6 +38,7 @@ don't depend on each other's runtime.
 ├─ SOUL.md                      # persona — seeded with a real starting persona
 ├─ USER.md                      # user preferences — seeded with a skeleton
 ├─ MEMORY.md                    # long-term facts — seeded with a skeleton
+├─ scopes.json                  # on/off per global/workspace/session — plugin-owned, not Cordis config
 └─ memory/
    ├─ 2026-10/2026-10-27.md     # tonight's diary
    └─ weekly/2026-W43.md        # weekly journal
@@ -62,9 +63,14 @@ Then enable it via [`examples/dsh-memory-journal.cordis.yml`](examples/dsh-memor
 dsh web --patch "$PWD/examples/dsh-memory-journal.cordis.yml"
 ```
 
-`enabled: false` by default — turn it on per workspace/session. Both
-packages must point at the same directory: js-shell's `dataDir` config field
-and py-mcp's `DSH_MEMORY_JOURNAL_DATA_DIR` env var (both default to
+`enabled: false` only seeds the initial global default in `scopes.json` the
+first time it's created — after that, whether injection is on is resolved
+from `scopes.json` itself (session overrides workspace overrides global),
+not from this static config field. Toggle it from the composer-dock status
+chip (📓) under the message box, or directly via `POST
+/api/dsh-memory-journal/scope`. Both packages must point at the same
+directory: js-shell's `dataDir` config field and py-mcp's
+`DSH_MEMORY_JOURNAL_DATA_DIR` env var (both default to
 `~/.dsh-memory-journal` when unset).
 
 ## Known limitations
@@ -73,10 +79,13 @@ and py-mcp's `DSH_MEMORY_JOURNAL_DATA_DIR` env var (both default to
   they only fire the next time someone talks to it.
 - User-edit detection only covers edits made through js-shell's own HTTP
   API, not direct file edits.
-- No settings-page UI yet, only the raw HTTP API.
+- No settings-page UI for viewing/editing SOUL.md/USER.md/MEMORY.md/diaries
+  yet — only the composer-dock on/off toggle and the raw HTTP API.
 - No multi-contact isolation — everyone sharing a DSH instance shares the
   same memory, by design.
 - `MEMORY.md` is never auto-pruned; only the injected copy is truncated.
+- The composer dock has not been visually verified in a real browser (this
+  environment has no GUI) — check it once in a real `dsh web` session.
 
 See [`js-shell/README.md`](js-shell/README.md) and
 [`py-mcp/README.md`](py-mcp/README.md) for package-level detail.

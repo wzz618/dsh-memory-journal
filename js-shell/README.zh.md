@@ -22,18 +22,24 @@ npm install -g dsh-memory-journal
 dsh web --patch "$PWD/examples/dsh-memory-journal.cordis.yml"
 ```
 
-默认 `enabled: false`，需要在 `cordis.patch.yml` 里对具体的 workspace/
-会话手动打开。
+`enabled: false` 只在 `scopes.json` 第一次创建时用作全局默认值；之后是
+否注入由 `scopes.json` 自己决定（见下），可以在 `cordis.patch.yml` 里改，
+也可以从 UI 上改。
 
 ## 它做什么
 
 - 插件挂载时立即生成 `SOUL.md`/`USER.md`/`MEMORY.md` 的起始内容。
 - 把这三个文件加上今天的日记注入 system prompt，顺序为 prompt 缓存稳定性
   设计（稳定的文件在前，日记放最后）。
+- 按 `scopes.json`（插件自己维护的小型存储，会话 > 工作区 > 全局，不是
+  Cordis config）解析这次请求是否真的要注入，取值依据是当前 agent 的
+  `session.header.id`/`.cwd`。
 - 日记/周记缺失时，通过注入文本提醒模型补上——没有真正的定时器，只在下次
   有人说话时才会被动触发。
+- 在输入框下方显示一个 📓 状态条（`conversation.composer.dock`），可以
+  切换全局/工作区/会话各自的开关。
 - `GET`/`POST /api/dsh-memory-journal/file?name=<SOUL.md|USER.md|MEMORY.md>`
-  （仅限本机）查看/编辑。
+  和 `POST /api/dsh-memory-journal/scope`（仅限本机）。
 
 完整图景（包括配套的 MCP server 和已知限制）见[仓库 README](../README.md)。
 

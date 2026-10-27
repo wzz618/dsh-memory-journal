@@ -23,8 +23,9 @@ Enable it through an overlay, e.g. the repo's
 dsh web --patch "$PWD/examples/dsh-memory-journal.cordis.yml"
 ```
 
-`enabled: false` by default — turn it on per workspace/session in your
-`cordis.patch.yml`.
+`enabled: false` only seeds `scopes.json`'s initial global default the
+first time it's created; after that, injection is governed by `scopes.json`
+itself (see below), editable in `cordis.patch.yml` or from the UI.
 
 ## What it does
 
@@ -32,11 +33,17 @@ dsh web --patch "$PWD/examples/dsh-memory-journal.cordis.yml"
   plugin is mounted.
 - Injects them plus today's diary into the system prompt, ordered for
   prompt-cache stability (stable files first, the diary last).
+- Resolves whether injection is actually on for a given turn from
+  `scopes.json` — a small store this plugin owns (session overrides
+  workspace overrides global), not Cordis config — keyed by the current
+  agent's `session.header.id`/`.cwd`.
 - Nudges the model, through the injected text, to write tonight's diary and
   this week's journal when missing — there is no real scheduler, this only
   fires on the next turn someone talks to it.
+- Shows a 📓 status chip under the composer (`conversation.composer.dock`)
+  with on/off toggles for global/workspace/session.
 - `GET`/`POST /api/dsh-memory-journal/file?name=<SOUL.md|USER.md|MEMORY.md>`
-  (loopback only) to view/edit.
+  and `POST /api/dsh-memory-journal/scope` (loopback only).
 
 See the [repo README](../README.md) for the full picture, including the
 companion MCP server and known limitations.

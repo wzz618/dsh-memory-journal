@@ -13,6 +13,13 @@
  * file grows, so a cached prefix survives); the diary is truncated from the
  * head instead, since it is already the last thing in the string and
  * keeping its most recent entries is more useful than keeping its oldest.
+ *
+ * Whether injection is actually on for a given turn is NOT read from the
+ * static `config.enabled` after first run — it's resolved from scopes.json
+ * (session overrides workspace overrides global), a small mutable store
+ * this plugin owns itself, mirroring dsh-persona-dafeiyu's own
+ * global/workspace/session persona scoping. `config.enabled` only seeds
+ * scopes.json's initial global default the first time it's created.
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -72,7 +79,7 @@ async function loadConfigSchema() {
     if (typeof z?.object === 'function') {
       return z.object({
         enabled: z.boolean().default(false)
-          .description('是否对当前作用域启用记忆注入（全局默认关闭，按工作区/会话单独开启）'),
+          .description('只在 scopes.json 第一次创建时用作全局默认值；此后实际是否注入由 scopes.json（可通过设置页/composer dock 切换）决定，这个字段不再生效'),
         order: z.number().default(0)
           .description('system prompt 段落顺序'),
         injectionBudgetChars: z.number().default(4000)
@@ -124,6 +131,54 @@ function seedFilesIfMissing(dataDir) {
     const path = join(dataDir, file)
     if (!existsSync(path)) writeFileAtomic(path, readFileSync(join(TEMPLATES_DIR, file), 'utf8'))
   }
+}
+
+function scopesPath(dataDir) {
+  return join(dataDir, 'scopes.json')
+}
+
+function readScopes(dataDir) {
+  try {
+    const parsed = JSON.parse(readFileSync(scopesPath(dataDir), 'utf8'))
+    return {
+      global: typeof parsed.global === 'boolean' ? parsed.global : false,
+      workspace: parsed.workspace && typeof parsed.workspace === 'object' ? parsed.workspace : {},
+      session: parsed.session && typeof parsed.session === 'object' ? parsed.session : {},
+    }
+  } catch {
+    return { global: false, workspace: {}, session: {} }
+  }
+}
+
+function writeScopes(dataDir, scopes) {
+  writeFileAtomic(scopesPath(dataDir), JSON.stringify(scopes, null, 2))
+}
+
+/** Creates scopes.json the first time this data directory is seen, seeded
+ * from config.enabled as the initial global default. Never overwrites an
+ * existing file — once scopes.json exists (including after any dock/API
+ * toggle), the static cordis.yml `enabled` field is no longer consulted. */
+function seedScopesIfMissing(dataDir, config) {
+  if (!existsSync(scopesPath(dataDir))) {
+    writeScopes(dataDir, { global: config.enabled, workspace: {}, session: {} })
+  }
+}
+
+/**
+ * Session overrides workspace overrides global — the same "finest wins"
+ * three-tier resolution dsh-persona-dafeiyu uses for its own scoping,
+ * applied here to "is memory injection on" instead of "which persona".
+ * `sessionId`/`cwd` come from the running agent's session header (see
+ * buildContextText), not from anything this plugin tracks itself.
+ */
+export function resolveEnabled(scopes, { sessionId, cwd }) {
+  if (sessionId !== undefined && Object.hasOwn(scopes.session, sessionId)) {
+    return { enabled: scopes.session[sessionId], level: 'session' }
+  }
+  if (cwd !== undefined && Object.hasOwn(scopes.workspace, cwd)) {
+    return { enabled: scopes.workspace[cwd], level: 'workspace' }
+  }
+  return { enabled: scopes.global, level: 'global' }
 }
 
 function monthDir(dataDir, year, month) {
@@ -224,10 +279,17 @@ function sendJson(res, status, body) {
 export async function apply(ctx, config) {
   const dataDir = resolveDataDir(config)
   seedFilesIfMissing(dataDir)
+  seedScopesIfMissing(dataDir, config)
   const userEditedPending = new Set()
 
-  function buildContextText() {
-    if (!config.enabled) return ''
+  // AssembleContext.agent is a documented merge-extension (see
+  // @deepseek-ai/dsh-agent's runtime-types.ts) set by assembleContextFor()
+  // for every real agent turn; absent only for diagnostic/manual assembly.
+  function buildContextText(context) {
+    const sessionId = context?.agent?.session?.header?.id
+    const cwd = context?.agent?.session?.header?.cwd
+    const { enabled } = resolveEnabled(readScopes(dataDir), { sessionId, cwd })
+    if (!enabled) return ''
 
     const now = new Date()
     const parts = []
@@ -275,7 +337,49 @@ export async function apply(ctx, config) {
       path: '/api/dsh-memory-journal/status',
       handler: (req, res) => {
         if (!isLoopbackRequest(req)) return sendJson(res, 403, { error: 'forbidden' })
-        sendJson(res, 200, { enabled: config.enabled, dataDir, injectionBudgetChars: config.injectionBudgetChars })
+        const url = new URL(req.url, 'http://localhost')
+        const sessionId = url.searchParams.get('sessionId') || undefined
+        const cwd = url.searchParams.get('cwd') || undefined
+        const scopes = readScopes(dataDir)
+        sendJson(res, 200, {
+          dataDir,
+          injectionBudgetChars: config.injectionBudgetChars,
+          scopes,
+          resolved: resolveEnabled(scopes, { sessionId, cwd }),
+        })
+      },
+    })
+
+    scope.webServer.register({
+      kind: 'exact',
+      path: '/api/dsh-memory-journal/scope',
+      handler: (req, res) => {
+        if (!isLoopbackRequest(req)) return sendJson(res, 403, { error: 'forbidden' })
+        if (req.method !== 'POST') return sendJson(res, 405, { error: 'method not allowed' })
+
+        let body = ''
+        req.on('data', (chunk) => { body += chunk })
+        req.on('end', () => {
+          try {
+            const { level, key, enabled } = JSON.parse(body)
+            if (typeof enabled !== 'boolean') throw new Error('enabled must be a boolean')
+            const scopes = readScopes(dataDir)
+            if (level === 'global') {
+              scopes.global = enabled
+            } else if (level === 'workspace' || level === 'session') {
+              if (typeof key !== 'string' || key.length === 0) {
+                throw new Error(`${level} scope requires a non-empty string key`)
+              }
+              scopes[level][key] = enabled
+            } else {
+              throw new Error(`unknown level: ${String(level)} (expected 'global', 'workspace', or 'session')`)
+            }
+            writeScopes(dataDir, scopes)
+            sendJson(res, 200, { ok: true, scopes })
+          } catch (error) {
+            sendJson(res, 400, { ok: false, error: error.message })
+          }
+        })
       },
     })
 

@@ -11,6 +11,7 @@ import {
   Config,
   isoWeekInfo,
   previousIsoWeek,
+  resolveEnabled,
   truncateKeepingHead,
   truncateKeepingTail,
 } from '../lib/index.js'
@@ -85,6 +86,15 @@ const tailTruncated = truncateKeepingTail('a'.repeat(100), 50)
 assert.equal(tailTruncated.length, 50)
 assert.ok(tailTruncated.endsWith('a'.repeat(10)))
 
+// resolveEnabled: session overrides workspace overrides global ("finest
+// wins", same rule dsh-persona-dafeiyu uses for persona scoping).
+const scopesFixture = { global: false, workspace: { '/proj': true }, session: { sess1: false } }
+assert.deepEqual(resolveEnabled(scopesFixture, {}), { enabled: false, level: 'global' })
+assert.deepEqual(resolveEnabled(scopesFixture, { cwd: '/proj' }), { enabled: true, level: 'workspace' })
+assert.deepEqual(resolveEnabled(scopesFixture, { cwd: '/proj', sessionId: 'sess1' }), { enabled: false, level: 'session' })
+assert.deepEqual(resolveEnabled(scopesFixture, { cwd: '/other' }), { enabled: false, level: 'global' })
+assert.deepEqual(resolveEnabled(scopesFixture, { sessionId: 'unknown-session' }), { enabled: false, level: 'global' })
+
 // isoWeekInfo / previousIsoWeek: internal consistency, all in local time —
 // every day of a Monday-start week must resolve to the same ISO week, and
 // "7 days ago" must land in that same earlier week.
@@ -103,6 +113,7 @@ const enabledDir = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
 const soulKeepDir = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
 const nightDir = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
 const weeklyDir = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
+const scopeDir = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
 try {
   // Disabled scope: the section is registered but injects nothing.
   withDataDir(disabledDir, () => {})
@@ -167,8 +178,27 @@ try {
   mkdirSync(dirname(weeklyFilePath), { recursive: true })
   writeFileSync(weeklyFilePath, '# 周记\n', 'utf8')
   assert.ok(!weeklyCtx.getSection().text().includes('这一周还没有写周记'))
+
+  // scopes.json wins over config.enabled once it exists: pre-seed a session
+  // override before apply() ever runs, so seedScopesIfMissing must not
+  // clobber it even though config.enabled says the opposite.
+  mkdirSync(scopeDir, { recursive: true })
+  writeFileSync(
+    join(scopeDir, 'scopes.json'),
+    JSON.stringify({ global: false, workspace: {}, session: { 'session-a': true } }),
+    'utf8',
+  )
+  withDataDir(scopeDir, () => {})
+  const scopeCtx = makeFakeCtx()
+  await apply(scopeCtx, await validateConfig({ enabled: false }))
+  const scopedText = scopeCtx.getSection().text
+  assert.ok(scopedText({ agent: { session: { header: { id: 'session-a', cwd: '/proj' } } } }).length > 0,
+    'session-a override should turn injection on despite config.enabled: false')
+  assert.equal(scopedText({ agent: { session: { header: { id: 'session-b', cwd: '/proj' } } } }), '',
+    'an unrelated session should fall through to the global default (false)')
+  assert.equal(scopedText(), '', 'no agent/session context (e.g. diagnostics) should fall through to global too')
 } finally {
-  for (const dir of [disabledDir, enabledDir, soulKeepDir, nightDir, weeklyDir]) {
+  for (const dir of [disabledDir, enabledDir, soulKeepDir, nightDir, weeklyDir, scopeDir]) {
     rmSync(dir, { recursive: true, force: true })
   }
   delete process.env.DSH_MEMORY_JOURNAL_DATA_DIR

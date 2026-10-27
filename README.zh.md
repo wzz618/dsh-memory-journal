@@ -34,6 +34,7 @@ Cordis 的 in-process 里（`ctx.systemPrompt`、`ctx.webServer`），而"模型
 ├─ SOUL.md                      # 人设——装完即生成真实的起始人设
 ├─ USER.md                      # 用户偏好——装完即生成骨架
 ├─ MEMORY.md                    # 长期记忆——装完即生成骨架
+├─ scopes.json                  # 全局/工作区/会话各自的开关——插件自己管理，不是 Cordis config
 └─ memory/
    ├─ 2026-10/2026-10-27.md     # 今晚的日记
    └─ weekly/2026-W43.md        # 周记
@@ -58,8 +59,11 @@ cd py-mcp && pip install dsh-memory-journal          # 或 pip install -e .
 dsh web --patch "$PWD/examples/dsh-memory-journal.cordis.yml"
 ```
 
-默认 `enabled: false`，需要对具体的 workspace/会话单独打开。两个包必须
-指向同一个目录：js-shell 的 `dataDir` config 字段和 py-mcp 的
+`enabled: false` 只在 `scopes.json` 第一次创建时用作全局默认值——此后
+是否注入由 `scopes.json` 自己决定（会话 > 工作区 > 全局），不再看这个
+静态字段。可以在输入框下方的状态条（📓）上切换，也可以直接
+`POST /api/dsh-memory-journal/scope`。两个包必须指向同一个目录：
+js-shell 的 `dataDir` config 字段和 py-mcp 的
 `DSH_MEMORY_JOURNAL_DATA_DIR` 环境变量（都不设置时默认是
 `~/.dsh-memory-journal`）。
 
@@ -69,10 +73,13 @@ dsh web --patch "$PWD/examples/dsh-memory-journal.cordis.yml"
   检查。
 - 用户编辑检测只覆盖通过 js-shell 自己的 HTTP API 做的编辑，不包括直接
   改磁盘文件。
-- 还没有设置页 UI，只有裸的 HTTP API。
+- 还没有查看/编辑 SOUL.md/USER.md/MEMORY.md/日记的设置页，目前只有
+  composer dock 的开关和裸的 HTTP API。
 - 不做多联系人隔离——同一个 DSH 实例的所有人共享同一份记忆，这是故意的
   设计取舍。
 - `MEMORY.md` 永不自动裁剪，只有注入的副本会被截断。
+- composer dock 还没在真实浏览器里视觉验证过（这个环境没有 GUI）——请在
+  真实的 `dsh web` 里确认一遍。
 
 更详细的内容见 [`js-shell/README.zh.md`](js-shell/README.zh.md) 和
 [`py-mcp/README.zh.md`](py-mcp/README.zh.md)。
