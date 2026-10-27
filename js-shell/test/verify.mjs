@@ -2,11 +2,45 @@
 // Runs with plain Node — no real Cordis/dsh host required, and never
 // touches the developer's real ~/.dsh-memory-journal directory.
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
-import { apply, Config, previousMonth, truncateKeepingTail } from '../lib/index.js'
+import {
+  apply,
+  Config,
+  isoWeekInfo,
+  previousIsoWeek,
+  truncateKeepingHead,
+  truncateKeepingTail,
+} from '../lib/index.js'
+
+const SEEDED_FILES = ['SOUL.md', 'USER.md', 'MEMORY.md']
+
+function addLocalDays(date, days) {
+  const result = new Date(date.getFullYear(), date.getMonth(), date.getDate())
+  result.setDate(result.getDate() + days)
+  return result
+}
+
+function mondayOfIsoWeekForTest(isoYear, isoWeek) {
+  const simple = new Date(isoYear, 0, 1 + (isoWeek - 1) * 7)
+  const dayOfWeek = simple.getDay() || 7
+  simple.setDate(simple.getDate() - dayOfWeek + 1)
+  return simple
+}
+
+function isoDateLabel(date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function dailyFilePath(dataDir, date) {
+  const label = isoDateLabel(date)
+  return join(dataDir, 'memory', label.slice(0, 7), `${label}.md`)
+}
 
 function makeFakeCtx() {
   let section = null
@@ -29,39 +63,114 @@ async function validateConfig(overrides) {
   return result.value
 }
 
-// truncateKeepingTail: keeps content under budget unchanged, truncates from the head
-// otherwise, and the result never exceeds the requested budget.
-assert.equal(truncateKeepingTail('abc', 10), 'abc')
-const truncated = truncateKeepingTail('a'.repeat(100), 50)
-assert.equal(truncated.length, 50)
-assert.ok(truncated.endsWith('a'.repeat(10)))
-
-// previousMonth: handles the January boundary.
-assert.deepEqual(previousMonth(new Date(2026, 0, 15)), { year: 2025, month: 12 })
-assert.deepEqual(previousMonth(new Date(2026, 9, 15)), { year: 2026, month: 9 })
-
-const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
-try {
+function withDataDir(dir, fn) {
   process.env.DSH_MEMORY_JOURNAL_DATA_DIR = dir
+  return fn()
+}
 
+// truncateKeepingHead: keeps the beginning fixed as content grows past budget.
+assert.equal(truncateKeepingHead('abc', 10), 'abc')
+const headTruncated = truncateKeepingHead('a'.repeat(100), 50)
+assert.equal(headTruncated.length, 50)
+assert.ok(headTruncated.startsWith('a'.repeat(10)))
+// Growing the input further must not change the kept prefix — that's the
+// whole point (a stable prompt-cache prefix).
+const headTruncatedMore = truncateKeepingHead(`${'a'.repeat(100)}${'b'.repeat(50)}`, 50)
+assert.equal(headTruncated.slice(0, 20), headTruncatedMore.slice(0, 20))
+
+// truncateKeepingTail: keeps the end fixed (used only for today's diary, the
+// last element in the injected text, where recency matters more).
+assert.equal(truncateKeepingTail('abc', 10), 'abc')
+const tailTruncated = truncateKeepingTail('a'.repeat(100), 50)
+assert.equal(tailTruncated.length, 50)
+assert.ok(tailTruncated.endsWith('a'.repeat(10)))
+
+// isoWeekInfo / previousIsoWeek: internal consistency, all in local time —
+// every day of a Monday-start week must resolve to the same ISO week, and
+// "7 days ago" must land in that same earlier week.
+const aMonday = new Date(2026, 9, 26) // 2026-10-26 is a Monday
+const sameWeek = isoWeekInfo(aMonday)
+for (let offset = 1; offset <= 6; offset += 1) {
+  assert.deepEqual(isoWeekInfo(addLocalDays(aMonday, offset)), sameWeek, `offset ${offset} should stay in the same ISO week`)
+}
+const nextMonday = addLocalDays(aMonday, 7)
+assert.deepEqual(previousIsoWeek(nextMonday), sameWeek)
+// mondayOfIsoWeekForTest must round-trip back to the same week.
+assert.deepEqual(isoWeekInfo(mondayOfIsoWeekForTest(sameWeek.isoYear, sameWeek.isoWeek)), sameWeek)
+
+const disabledDir = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
+const enabledDir = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
+const soulKeepDir = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
+const nightDir = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
+const weeklyDir = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
+try {
   // Disabled scope: the section is registered but injects nothing.
+  withDataDir(disabledDir, () => {})
   const disabledConfig = await validateConfig({ enabled: false })
   const disabledCtx = makeFakeCtx()
   await apply(disabledCtx, disabledConfig)
   assert.equal(disabledCtx.getSection().name, 'memory-journal:context')
   assert.equal(disabledCtx.getSection().text(), '')
   assert.equal(disabledCtx.hasWebServerCallback(), true)
+  // Seeding happens even for a disabled scope — it's a directory concern,
+  // not an injection concern.
+  for (const file of SEEDED_FILES) {
+    assert.ok(readFileSync(join(disabledDir, file), 'utf8').length > 0, `${file} should be seeded even when disabled`)
+  }
 
-  // Enabled scope: text() returns a non-empty string once a disk file exists.
-  process.env.DSH_MEMORY_JOURNAL_DATA_DIR = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
-  const enabledConfig = await validateConfig({ enabled: true, injectionBudgetChars: 50 })
+  // Enabled scope: all three files get seeded with real content and injected.
+  withDataDir(enabledDir, () => {})
+  const enabledConfig = await validateConfig({ enabled: true, injectionBudgetChars: 4000 })
   const enabledCtx = makeFakeCtx()
   await apply(enabledCtx, enabledConfig)
   const text = enabledCtx.getSection().text()
   assert.equal(typeof text, 'string')
+  assert.ok(text.includes('大肥鱼'), 'injected text should include the seeded SOUL.md persona')
   assert.ok(text.includes('仅当用户明确要求'))
+  for (const file of SEEDED_FILES) {
+    assert.ok(readFileSync(join(enabledDir, file), 'utf8').length > 0)
+  }
+
+  // Seeding never overwrites a file that already has real content.
+  writeFileSync(join(soulKeepDir, 'SOUL.md'), '已经有真实人设了', 'utf8')
+  withDataDir(soulKeepDir, () => {})
+  await apply(makeFakeCtx(), await validateConfig({ enabled: true }))
+  assert.equal(readFileSync(join(soulKeepDir, 'SOUL.md'), 'utf8'), '已经有真实人设了')
+
+  // Night nudge: nightHour: 0 makes "now.getHours() >= nightHour" always
+  // true, so this is deterministic regardless of when the test actually
+  // runs. No diary written yet today -> nudge appears.
+  withDataDir(nightDir, () => {})
+  const nightCtx = makeFakeCtx()
+  await apply(nightCtx, await validateConfig({ enabled: true, nightHour: 0 }))
+  assert.ok(nightCtx.getSection().text().includes('还没有写日记'))
+
+  // Once today's diary file exists, the nudge stops.
+  mkdirSync(dirname(dailyFilePath(nightDir, new Date())), { recursive: true })
+  writeFileSync(dailyFilePath(nightDir, new Date()), '# 今天\n', 'utf8')
+  assert.ok(!nightCtx.getSection().text().includes('还没有写日记'))
+
+  // Weekly nudge: a daily note exists for a completed ISO week with no
+  // weekly journal yet -> nudge appears, keyed off that week's label.
+  withDataDir(weeklyDir, () => {})
+  const weeklyCtx = makeFakeCtx()
+  await apply(weeklyCtx, await validateConfig({ enabled: true }))
+  const lastWeek = previousIsoWeek(new Date())
+  const lastWeekLabel = `${lastWeek.isoYear}-W${String(lastWeek.isoWeek).padStart(2, '0')}`
+  const aDayLastWeek = mondayOfIsoWeekForTest(lastWeek.isoYear, lastWeek.isoWeek)
+  mkdirSync(dirname(dailyFilePath(weeklyDir, aDayLastWeek)), { recursive: true })
+  writeFileSync(dailyFilePath(weeklyDir, aDayLastWeek), '# 上周某一天\n', 'utf8')
+  assert.ok(weeklyCtx.getSection().text().includes(`${lastWeekLabel} 这一周还没有写周记`))
+
+  // Once that week's journal file exists, the nudge stops.
+  const weeklyFilePath = join(weeklyDir, 'memory', 'weekly', `${lastWeekLabel}.md`)
+  mkdirSync(dirname(weeklyFilePath), { recursive: true })
+  writeFileSync(weeklyFilePath, '# 周记\n', 'utf8')
+  assert.ok(!weeklyCtx.getSection().text().includes('这一周还没有写周记'))
 } finally {
-  rmSync(dir, { recursive: true, force: true })
+  for (const dir of [disabledDir, enabledDir, soulKeepDir, nightDir, weeklyDir]) {
+    rmSync(dir, { recursive: true, force: true })
+  }
   delete process.env.DSH_MEMORY_JOURNAL_DATA_DIR
 }
 

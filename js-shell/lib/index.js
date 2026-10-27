@@ -1,17 +1,33 @@
 /**
- * dsh-memory-journal (js-shell): forces USER.md/MEMORY.md into every system
- * prompt assembly and exposes a loopback-only HTTP API for reading/editing
- * the Markdown memory files. Explicit recall/write/review tools live in the
- * companion py-mcp MCP server, not here — this half only does what requires
- * running inside the Cordis process (systemPrompt injection, webServer).
+ * dsh-memory-journal (js-shell): forces SOUL.md/USER.md/MEMORY.md and
+ * today's diary into every system prompt assembly, and exposes a
+ * loopback-only HTTP API for reading/editing the Markdown memory files.
+ * Explicit recall/write/journal tools live in the companion py-mcp MCP
+ * server, not here — this half only does what requires running inside the
+ * Cordis process (systemPrompt injection, webServer).
+ *
+ * Injection order is deliberate for prompt-cache friendliness: SOUL.md (near
+ * static) → USER.md (changes occasionally) → MEMORY.md (grows slowly) →
+ * today's diary (changes most often, within a single day). The first three
+ * are truncated from the tail (the kept head stays byte-identical as the
+ * file grows, so a cached prefix survives); the diary is truncated from the
+ * head instead, since it is already the last thing in the string and
+ * keeping its most recent entries is more useful than keeping its oldest.
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const SECTION_NAME = 'memory-journal:context'
-const NUMBER_FIELDS = ['order', 'injectionBudgetChars', 'dailyNotesLookbackDays']
-const TRACKED_FILES = ['USER.md', 'MEMORY.md']
+const NUMBER_FIELDS = ['order', 'injectionBudgetChars', 'nightHour']
+const TRACKED_FILES = ['SOUL.md', 'USER.md', 'MEMORY.md']
+
+// Seed content lives as real files under templates/ (not inline string
+// literals) so it can be opened and edited directly. SOUL.md's default
+// persona text there is adapted from the dsh-persona-dafeiyu plugin (MIT
+// License) — see README for attribution.
+const TEMPLATES_DIR = fileURLToPath(new URL('../templates/', import.meta.url))
 
 const FALLBACK_CONFIG = {
   '~standard': {
@@ -23,7 +39,7 @@ const FALLBACK_CONFIG = {
         enabled: false,
         order: 0,
         injectionBudgetChars: 4000,
-        dailyNotesLookbackDays: 2,
+        nightHour: 21,
         dataDir: '',
       }
       const input = value && typeof value === 'object' ? value : {}
@@ -60,9 +76,9 @@ async function loadConfigSchema() {
         order: z.number().default(0)
           .description('system prompt 段落顺序'),
         injectionBudgetChars: z.number().default(4000)
-          .description('每次注入 USER.md+MEMORY.md 的字符预算上限，超出时只截断注入副本，不改动磁盘原文'),
-        dailyNotesLookbackDays: z.number().default(2)
-          .description('保留字段：新会话额外带上最近 N 天日记（当前版本尚未接入，见 README 已知限制）'),
+          .description('SOUL.md/USER.md/MEMORY.md 各自独立的字符预算上限（不是三者总和）；超出时只截断注入副本的结尾，保留开头不变以维持缓存前缀稳定，磁盘原文不受影响'),
+        nightHour: z.number().default(21)
+          .description('几点（24 小时制，本机时区）之后视为"晚上"，用于提示模型今天的日记还没写'),
         dataDir: z.string().default('')
           .description('记忆文件目录，留空则使用 ~/.dsh-memory-journal 或 DSH_MEMORY_JOURNAL_DATA_DIR'),
       })
@@ -97,23 +113,96 @@ function writeFileAtomic(path, content) {
   renameSync(tmp, path)
 }
 
+/** Creates SOUL.md/USER.md/MEMORY.md with starter content as soon as this
+ * plugin is mounted (not lazily on first read) — so they show up in the
+ * data directory, and through the /file API, right after install. Each
+ * file's starter content is read from templates/<file> next to this
+ * package, not embedded as a string literal. Never overwrites a file that
+ * already exists. */
+function seedFilesIfMissing(dataDir) {
+  for (const file of TRACKED_FILES) {
+    const path = join(dataDir, file)
+    if (!existsSync(path)) writeFileAtomic(path, readFileSync(join(TEMPLATES_DIR, file), 'utf8'))
+  }
+}
+
 function monthDir(dataDir, year, month) {
   return join(dataDir, 'memory', `${year}-${String(month).padStart(2, '0')}`)
 }
 
-export function previousMonth(date) {
-  const currentMonth = date.getMonth() + 1
-  const currentYear = date.getFullYear()
-  if (currentMonth === 1) return { year: currentYear - 1, month: 12 }
-  return { year: currentYear, month: currentMonth - 1 }
+function dailyPath(dataDir, date) {
+  const year = date.getFullYear()
+  const month = date.getMonth() + 1
+  const day = date.getDate()
+  const iso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+  return join(monthDir(dataDir, year, month), `${iso}.md`)
 }
 
-const TRUNCATION_MARKER = '…(更早内容已截断，完整内容可用 memory_get 查询)…\n'
+// ISO 8601 week helpers. Everything here stays in local-calendar time
+// (Date's local getters/setters) end to end — never mixed with UTC getters —
+// so this agrees with dailyPath's local getFullYear/getMonth/getDate. Using
+// setDate() for day arithmetic (not raw millisecond offsets) keeps it
+// correct across DST transitions.
+function addDays(date, days) {
+  const result = new Date(date.getFullYear(), date.getMonth(), date.getDate())
+  result.setDate(result.getDate() + days)
+  return result
+}
 
+export function isoWeekInfo(date) {
+  const d = addDays(date, 0)
+  const dayNum = (d.getDay() + 6) % 7 // Monday=0..Sunday=6
+  d.setDate(d.getDate() - dayNum + 3) // Thursday of this ISO week
+  const firstThursday = new Date(d.getFullYear(), 0, 4)
+  const firstDayNum = (firstThursday.getDay() + 6) % 7
+  firstThursday.setDate(firstThursday.getDate() - firstDayNum + 3)
+  const isoWeek = 1 + Math.round((d - firstThursday) / (7 * 24 * 3600 * 1000))
+  return { isoYear: d.getFullYear(), isoWeek }
+}
+
+export function previousIsoWeek(date) {
+  return isoWeekInfo(addDays(date, -7))
+}
+
+function mondayOfIsoWeek(isoYear, isoWeek) {
+  const simple = new Date(isoYear, 0, 1 + (isoWeek - 1) * 7)
+  const dayOfWeek = simple.getDay() || 7 // Sunday=0 -> 7
+  simple.setDate(simple.getDate() - dayOfWeek + 1)
+  return simple
+}
+
+function weeklyPath(dataDir, isoYear, isoWeek) {
+  const label = `${isoYear}-W${String(isoWeek).padStart(2, '0')}`
+  return join(dataDir, 'memory', 'weekly', `${label}.md`)
+}
+
+function anyDailyNoteExistsInIsoWeek(dataDir, isoYear, isoWeek) {
+  const monday = mondayOfIsoWeek(isoYear, isoWeek)
+  for (let offset = 0; offset < 7; offset += 1) {
+    if (existsSync(dailyPath(dataDir, addDays(monday, offset)))) return true
+  }
+  return false
+}
+
+const TRUNCATION_HEAD_MARKER = '\n…(更早内容已截断，完整内容可用 memory_get 查询)…'
+const TRUNCATION_TAIL_MARKER = '…(更早内容已截断，完整内容可用 memory_get 查询)…\n'
+
+/** Keeps the beginning of `text` and drops the end once over budget, so the
+ * kept prefix never shifts as the file grows — used for SOUL.md/USER.md/
+ * MEMORY.md so a cached prompt prefix survives their growth. */
+export function truncateKeepingHead(text, budget) {
+  if (text.length <= budget) return text
+  const keep = Math.max(budget - TRUNCATION_HEAD_MARKER.length, 0)
+  return `${text.slice(0, keep)}${TRUNCATION_HEAD_MARKER}`
+}
+
+/** Keeps the end of `text` and drops the beginning once over budget — used
+ * for today's diary, which is already the last thing injected, so keeping
+ * its most recent entries is more useful than keeping its oldest. */
 export function truncateKeepingTail(text, budget) {
   if (text.length <= budget) return text
-  const keep = Math.max(budget - TRUNCATION_MARKER.length, 0)
-  return `${TRUNCATION_MARKER}${text.slice(text.length - keep)}`
+  const keep = Math.max(budget - TRUNCATION_TAIL_MARKER.length, 0)
+  return `${TRUNCATION_TAIL_MARKER}${text.slice(text.length - keep)}`
 }
 
 function isLoopbackRequest(req) {
@@ -134,18 +223,22 @@ function sendJson(res, status, body) {
  */
 export async function apply(ctx, config) {
   const dataDir = resolveDataDir(config)
+  seedFilesIfMissing(dataDir)
   const userEditedPending = new Set()
 
   function buildContextText() {
     if (!config.enabled) return ''
 
+    const now = new Date()
     const parts = []
-    const userText = readFileSafe(join(dataDir, 'USER.md'))
-    const memoryText = readFileSafe(join(dataDir, 'MEMORY.md'))
-    const combined = [userText, memoryText].filter(Boolean).join('\n\n')
-    if (combined) {
-      parts.push(truncateKeepingTail(combined, config.injectionBudgetChars))
+
+    for (const file of TRACKED_FILES) {
+      const text = readFileSafe(join(dataDir, file))
+      if (text) parts.push(truncateKeepingHead(text, config.injectionBudgetChars))
     }
+
+    const diaryText = readFileSafe(dailyPath(dataDir, now))
+    if (diaryText) parts.push(truncateKeepingTail(diaryText, config.injectionBudgetChars))
 
     for (const file of TRACKED_FILES) {
       if (userEditedPending.has(file)) {
@@ -154,12 +247,14 @@ export async function apply(ctx, config) {
       }
     }
 
-    const { year, month } = previousMonth(new Date())
-    const reviewMonthDir = monthDir(dataDir, year, month)
-    const reviewPath = join(reviewMonthDir, 'review.md')
-    if (existsSync(reviewMonthDir) && !existsSync(reviewPath)) {
-      const label = `${year}-${String(month).padStart(2, '0')}`
-      parts.push(`（提示：${label} 还没有月度回顾，可以调用 memory_get 读取该月全部日记后生成一份回顾，并在 DREAMS.md 追加一条不超过 200 字的小结。）`)
+    if (now.getHours() >= config.nightHour && !existsSync(dailyPath(dataDir, now))) {
+      parts.push('（提示：今天还没有写日记。如果记得今天发生了什么值得记录的事，请写一篇日记并把其中值得长期记住的内容另外追加进长期记忆。）')
+    }
+
+    const { isoYear, isoWeek } = previousIsoWeek(now)
+    if (!existsSync(weeklyPath(dataDir, isoYear, isoWeek)) && anyDailyNoteExistsInIsoWeek(dataDir, isoYear, isoWeek)) {
+      const label = `${isoYear}-W${String(isoWeek).padStart(2, '0')}`
+      parts.push(`（提示：${label} 这一周还没有写周记，可以读取该周每天的日记后生成一份周记。）`)
     }
 
     parts.push('以上内容每次对话都会自动带上。仅当用户明确要求"记住"或"回想"某事时，才调用记忆检索/写入工具做精确操作，不需要每轮都主动查询。')
@@ -192,7 +287,7 @@ export async function apply(ctx, config) {
 
         const url = new URL(req.url, 'http://localhost')
         const fileName = url.searchParams.get('name')
-        if (!TRACKED_FILES.includes(fileName) && fileName !== 'DREAMS.md') {
+        if (!TRACKED_FILES.includes(fileName)) {
           return sendJson(res, 400, { error: 'unknown file' })
         }
 
@@ -208,7 +303,7 @@ export async function apply(ctx, config) {
               const { content } = JSON.parse(body)
               if (typeof content !== 'string') throw new Error('content must be a string')
               writeFileAtomic(join(dataDir, fileName), content)
-              if (TRACKED_FILES.includes(fileName)) userEditedPending.add(fileName)
+              userEditedPending.add(fileName)
               sendJson(res, 200, { ok: true })
             } catch (error) {
               sendJson(res, 400, { ok: false, error: error.message })

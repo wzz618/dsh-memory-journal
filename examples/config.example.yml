@@ -1,8 +1,8 @@
 # js-shell（dsh-memory-journal）的插件级 config 字段说明。
 enabled: false              # 默认关闭，按需对某个 workspace/会话单独开启
 order: 0                    # system prompt 段落顺序
-injectionBudgetChars: 4000  # 每次自动注入 USER.md+MEMORY.md 的字符预算；超出只截断注入副本，磁盘原文不变
-dailyNotesLookbackDays: 2   # 保留字段，当前版本尚未接入（见 README「已知限制」）
+injectionBudgetChars: 4000  # SOUL.md/USER.md/MEMORY.md 各自独立的字符预算；超出只截断注入副本的结尾，磁盘原文不变
+nightHour: 21               # 几点（本机时区）之后提示模型今天的日记还没写
 dataDir: ''                 # 留空则用 ~/.dsh-memory-journal，也可用环境变量 DSH_MEMORY_JOURNAL_DATA_DIR 覆盖
 
 # py-mcp（dsh-memory-journal 可执行文件）不读这份 config——它只认

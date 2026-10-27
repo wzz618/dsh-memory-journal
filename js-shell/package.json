@@ -1,7 +1,7 @@
 {
   "name": "dsh-memory-journal",
   "version": "0.0.1",
-  "description": "日记式长期记忆插件 for DeepSeek Harness：USER.md/MEMORY.md 每次对话自动注入，DREAMS.md 月度小结，按月归档的日记与月度回顾。显式检索/写入工具由配套的 Python MCP server（py-mcp/）提供。",
+  "description": "日记式长期记忆插件 for DeepSeek Harness：SOUL.md/USER.md/MEMORY.md 和今天的日记每次对话自动注入，按周生成周记。显式检索/写入工具由配套的 Python MCP server（py-mcp/）提供。",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -12,6 +12,9 @@
   "files": [
     "lib/index.js",
     "lib/client.js",
+    "templates/SOUL.md",
+    "templates/USER.md",
+    "templates/MEMORY.md",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"
