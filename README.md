@@ -2,13 +2,14 @@
 
 [English](README.md) | [中文](README.zh.md)
 
-Lightweight journal-style long-term memory for DeepSeek Harness. Every
-conversation automatically carries `SOUL.md` (persona), `USER.md`
-(preferences), `MEMORY.md` (long-term facts), and today's diary. The model
-is nudged to write tonight's diary and promote anything worth keeping into
-`MEMORY.md`, and to write a weekly journal reviewing that week's diaries.
-Explicit search/recall tools are only meant to be called when the user
-clearly says "remember" or "recall" something.
+Once enabled, every conversation automatically carries persona,
+preferences, and journal-style long-term memory — no need to reintroduce
+yourself every time, and the content keeps self-iterating through
+conversation (writing diary entries, promoting anything worth keeping into
+`MEMORY.md`, reviewing the week into a journal entry, and adjusting
+`SOUL.md`'s persona when warranted). Explicit search/recall tools are only
+meant to be called when the user clearly says "remember" or "recall"
+something.
 
 Not an official DeepSeek plugin; inclusion/use implies no endorsement or
 support commitment.
