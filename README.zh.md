@@ -59,9 +59,10 @@ cd py-mcp && pip install dsh-memory-journal          # 或 pip install -e .
 dsh web --patch "$PWD/examples/dsh-memory-journal.cordis.yml"
 ```
 
-`enabled: false` 只在 `scopes.json` 第一次创建时用作全局默认值——此后
-是否注入由 `scopes.json` 自己决定（会话 > 工作区 > 全局），不再看这个
-静态字段。可以在输入框下方的状态条（📓）上切换，也可以直接
+`enabled: true` 只在 `scopes.json` 第一次创建时用作全局默认值（默认到处
+都是开的）——此后是否注入由 `scopes.json` 自己决定（会话 > 工作区 >
+全局），不再看这个静态字段。要给某个 workspace/会话单独关掉，可以在
+输入框下方的状态条（📓）上切换，也可以直接
 `POST /api/dsh-memory-journal/scope`。两个包必须指向同一个目录：
 js-shell 的 `dataDir` config 字段和 py-mcp 的
 `DSH_MEMORY_JOURNAL_DATA_DIR` 环境变量（都不设置时默认是

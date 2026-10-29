@@ -63,11 +63,12 @@ Then enable it via [`examples/dsh-memory-journal.cordis.yml`](examples/dsh-memor
 dsh web --patch "$PWD/examples/dsh-memory-journal.cordis.yml"
 ```
 
-`enabled: false` only seeds the initial global default in `scopes.json` the
-first time it's created — after that, whether injection is on is resolved
-from `scopes.json` itself (session overrides workspace overrides global),
-not from this static config field. Toggle it from the composer-dock status
-chip (📓) under the message box, or directly via `POST
+`enabled: true` only seeds the initial global default in `scopes.json` the
+first time it's created (memory is on everywhere by default) — after that,
+whether injection is on is resolved from `scopes.json` itself (session
+overrides workspace overrides global), not from this static config field.
+Toggle it off for a specific workspace/session from the composer-dock
+status chip (📓) under the message box, or directly via `POST
 /api/dsh-memory-journal/scope`. Both packages must point at the same
 directory: js-shell's `dataDir` config field and py-mcp's
 `DSH_MEMORY_JOURNAL_DATA_DIR` env var (both default to

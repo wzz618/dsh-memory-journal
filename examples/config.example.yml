@@ -1,5 +1,5 @@
 # js-shell（dsh-memory-journal）的插件级 config 字段说明。
-enabled: false              # 只在 scopes.json 第一次创建时用作全局默认值；此后实际生效看 scopes.json（composer dock 或 /api/.../scope 可改）
+enabled: true               # 只在 scopes.json 第一次创建时用作全局默认值（默认开）；此后实际生效看 scopes.json（composer dock 或 /api/.../scope 可改）
 order: 0                    # system prompt 段落顺序
 injectionBudgetChars: 4000  # SOUL.md/USER.md/MEMORY.md 各自独立的字符预算；超出只截断注入副本的结尾，磁盘原文不变
 nightHour: 21               # 几点（本机时区）之后提示模型今天的日记还没写

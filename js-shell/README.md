@@ -23,9 +23,10 @@ Enable it through an overlay, e.g. the repo's
 dsh web --patch "$PWD/examples/dsh-memory-journal.cordis.yml"
 ```
 
-`enabled: false` only seeds `scopes.json`'s initial global default the
-first time it's created; after that, injection is governed by `scopes.json`
-itself (see below), editable in `cordis.patch.yml` or from the UI.
+`enabled: true` only seeds `scopes.json`'s initial global default the
+first time it's created (memory is on everywhere by default); after that,
+injection is governed by `scopes.json` itself (see below), editable in
+`cordis.patch.yml` or from the UI.
 
 ## What it does
 

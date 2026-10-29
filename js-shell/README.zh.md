@@ -22,9 +22,9 @@ npm install -g dsh-memory-journal
 dsh web --patch "$PWD/examples/dsh-memory-journal.cordis.yml"
 ```
 
-`enabled: false` 只在 `scopes.json` 第一次创建时用作全局默认值；之后是
-否注入由 `scopes.json` 自己决定（见下），可以在 `cordis.patch.yml` 里改，
-也可以从 UI 上改。
+`enabled: true` 只在 `scopes.json` 第一次创建时用作全局默认值（默认到处
+都是开的）；之后是否注入由 `scopes.json` 自己决定（见下），可以在
+`cordis.patch.yml` 里改，也可以从 UI 上改。
 
 ## 它做什么
 

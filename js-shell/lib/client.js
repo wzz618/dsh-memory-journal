@@ -2,8 +2,9 @@
 // its own runtime module loader (window.__ModuleLoader__), which calls
 // `factory(require)` and expects `module.exports` back; `require` only
 // resolves host-provided modules (react, react/jsx-runtime, ...). This
-// wrapper shape and the slots/locale registration pattern below mirror
-// dsh-persona-dafeiyu's lib/client.js (MIT License) — see README.
+// wrapper shape, the slots/locale registration, and the dock's styling
+// below mirror dsh-persona-dafeiyu's lib/client.js (MIT License) — see
+// README.
 //
 // Scope: a single `conversation.composer.dock` entry showing whether memory
 // injection is on for this conversation and at which level (global/
@@ -18,6 +19,67 @@ window.__ModuleLoader__.load({
 		Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' })
 
 		const react = require('react')
+		const jsxRuntime = require('react/jsx-runtime')
+
+		// Same keys and --dsw-alias-* design tokens as dsh-persona-dafeiyu's
+		// dock, so this chip looks native to the host's theme (light/dark)
+		// instead of unstyled plain text.
+		const styles = {
+			dock: {
+				display: 'flex',
+				alignItems: 'center',
+				flexWrap: 'wrap',
+				gap: '6px',
+				fontSize: '11px',
+				color: 'var(--dsw-alias-label-tertiary)',
+			},
+			wrapper: { position: 'relative', display: 'inline-flex', alignItems: 'center' },
+			// On/off is conveyed by brightness alone, not by text: `bright` is the
+			// lit (on) look, `dim` is the same shape with lowered opacity and
+			// muted color (off). Both the trigger and every popover row use
+			// whichever of these two matches their own current value.
+			bright: {
+				font: 'inherit',
+				fontSize: '11px',
+				padding: '1px 8px',
+				borderRadius: '999px',
+				border: '1px solid var(--dsw-alias-state-business-primary, #4b7bec)',
+				background: 'transparent',
+				color: 'var(--dsw-alias-state-business-primary, #4b7bec)',
+				cursor: 'pointer',
+				opacity: 1,
+			},
+			dim: {
+				font: 'inherit',
+				fontSize: '11px',
+				padding: '1px 8px',
+				borderRadius: '999px',
+				border: '1px solid var(--dsw-alias-border-l2)',
+				background: 'transparent',
+				color: 'var(--dsw-alias-label-tertiary)',
+				cursor: 'pointer',
+				opacity: 0.5,
+			},
+			// Opens upward (bottom: 100%) since the dock sits at the bottom of the
+			// screen, right above the composer — a downward popover would run
+			// off-screen. left: 0 keeps it flush with the trigger it belongs to.
+			popover: {
+				position: 'absolute',
+				bottom: 'calc(100% + 4px)',
+				left: 0,
+				display: 'flex',
+				flexDirection: 'column',
+				gap: '4px',
+				padding: '4px',
+				borderRadius: '10px',
+				border: '1px solid var(--dsw-alias-border-l2)',
+				background: 'var(--dsw-alias-bg-layer, #fff)',
+				boxShadow: '0 8px 24px rgba(0, 0, 0, 0.18)',
+				zIndex: 10,
+			},
+			popoverItemLayout: { textAlign: 'left', whiteSpace: 'nowrap' },
+			messageError: { fontSize: '13px', margin: 0, color: 'var(--dsw-alias-state-error-primary, #d4380d)' },
+		}
 
 		/** 字典命名空间。 */
 		const NS = 'memoryJournal'
@@ -35,7 +97,7 @@ window.__ModuleLoader__.load({
 			level_session: '会话',
 			state_on: '开',
 			state_off: '关',
-			state_unset: '未设置',
+			loading: '加载中',
 			error: '出错了',
 		}
 		const en = {
@@ -46,7 +108,7 @@ window.__ModuleLoader__.load({
 			level_session: 'Session',
 			state_on: 'On',
 			state_off: 'Off',
-			state_unset: 'Unset',
+			loading: 'Loading',
 			error: 'Error',
 		}
 
@@ -79,15 +141,6 @@ window.__ModuleLoader__.load({
 			return body.scopes
 		}
 
-		// Cycles a level's own stored value: unset -> true -> false -> unset.
-		// "global" has no unset state (it always holds a boolean).
-		function nextValue(level, current) {
-			if (level === 'global') return !current
-			if (current === undefined) return true
-			if (current === true) return false
-			return undefined
-		}
-
 		function MemoryDock(props) {
 			const t = typeof props?.t === 'function' ? props.t : (key) => key
 			const sessionId = typeof props?.sessionId === 'string' ? props.sessionId : ''
@@ -95,70 +148,98 @@ window.__ModuleLoader__.load({
 			const cwd = typeof useSessions === 'function'
 				? useSessions((snapshot) => {
 					const entry = sessionId.length > 0 && snapshot && snapshot.byId ? snapshot.byId[sessionId] : undefined
-					return entry && typeof entry.cwd === 'string' ? entry.cwd : undefined
+					return entry && typeof entry.cwd === 'string' && entry.cwd.length > 0 ? entry.cwd : undefined
 				})
 				: undefined
 
-			const [scopes, setScopes] = react.useState(null)
-			const [resolved, setResolved] = react.useState(null)
-			const [error, setError] = react.useState(null)
+			const [state, setState] = react.useState({ status: 'loading' })
+			const [busy, setBusy] = react.useState(false)
+			const [toggleError, setToggleError] = react.useState(null)
+			const [open, setOpen] = react.useState(false)
 
-			const reload = react.useCallback(() => {
+			const load = react.useCallback(() => {
 				fetchStatus(sessionId, cwd)
-					.then((body) => {
-						setScopes(body.scopes)
-						setResolved(body.resolved)
-						setError(null)
-					})
-					.catch((err) => setError(err.message))
+					.then((body) => setState({ status: 'ready', scopes: body.scopes, resolved: body.resolved }))
+					.catch((error) => setState({ status: 'error', message: error.message }))
 			}, [sessionId, cwd])
 
-			react.useEffect(() => { reload() }, [reload])
+			react.useEffect(() => { load() }, [load])
 
-			if (error) {
-				return react.createElement('span', { title: error }, `${t('icon')} ${t('error')}`)
+			if (state.status === 'loading') {
+				return jsxRuntime.jsx('div', { style: styles.dock, children: `${t('icon')} ${t('loading')}` })
 			}
-			if (!scopes || !resolved) {
-				return react.createElement('span', null, t('icon'))
+			if (state.status === 'error') {
+				return jsxRuntime.jsx('div', { style: styles.dock, children: `${t('icon')} ${t('error')}` })
 			}
 
-			const currentValueByLevel = {
-				global: scopes.global,
-				workspace: cwd ? scopes.workspace[cwd] : undefined,
-				session: sessionId ? scopes.session[sessionId] : undefined,
-			}
+			const { scopes, resolved } = state
 			const keyByLevel = { global: undefined, workspace: cwd, session: sessionId }
 
+			// No "unset" state — a row with no stored value of its own just
+			// shows (and, on click, flips away from) the overall effective
+			// result, same as the global row always does for its own value.
+			function displayValue(level) {
+				if (level === 'global') return scopes.global
+				if (level === 'workspace') return cwd && Object.hasOwn(scopes.workspace, cwd) ? scopes.workspace[cwd] : resolved.enabled
+				return sessionId && Object.hasOwn(scopes.session, sessionId) ? scopes.session[sessionId] : resolved.enabled
+			}
+
 			function stateLabel(level) {
-				const value = currentValueByLevel[level]
-				if (value === undefined) return t('state_unset')
-				return value ? t('state_on') : t('state_off')
+				return displayValue(level) ? t('state_on') : t('state_off')
+			}
+
+			function styleFor(level, layoutStyle) {
+				const base = displayValue(level) ? styles.bright : styles.dim
+				return layoutStyle ? { ...base, ...layoutStyle } : base
 			}
 
 			function onToggle(level) {
 				const key = keyByLevel[level]
 				if (level !== 'global' && !key) return // no workspace/session identity yet
-				const next = nextValue(level, currentValueByLevel[level])
-				postScope(level, key, next === undefined ? false : next)
-					.then(() => reload())
-					.catch((err) => setError(err.message))
+				setBusy(true)
+				setToggleError(null)
+				setOpen(false)
+				postScope(level, key, !displayValue(level))
+					.then(() => load())
+					.catch((error) => setToggleError(error.message))
+					.then(() => setBusy(false))
 			}
 
-			return react.createElement(
-				'span',
-				{ title: `${t('label')} · ${levelLabel(t, resolved.level)}` },
-				`${t('icon')} ${t('label')} · ${levelLabel(t, resolved.level)} `,
-				...['global', 'workspace', 'session'].map((level) => react.createElement(
-					'button',
-					{
-						key: level,
+			const triggerLabel = `${t('icon')} ${t('label')} · ${levelLabel(t, resolved.level)} ${open ? '▴' : '▾'}`
+
+			const children = [jsxRuntime.jsx('button', {
+				type: 'button',
+				style: styleFor(resolved.level),
+				disabled: busy,
+				title: `${levelLabel(t, resolved.level)}(${stateLabel(resolved.level)})`,
+				'aria-expanded': open,
+				onClick: () => setOpen((wasOpen) => !wasOpen),
+				children: triggerLabel,
+			}, 'trigger')]
+
+			if (open) {
+				children.push(jsxRuntime.jsx('div', {
+					style: styles.popover,
+					children: ['global', 'workspace', 'session'].map((level) => jsxRuntime.jsx('button', {
 						type: 'button',
-						disabled: level !== 'global' && !keyByLevel[level],
+						style: styleFor(level, styles.popoverItemLayout),
+						disabled: busy || (level !== 'global' && !keyByLevel[level]),
+						title: `${levelLabel(t, level)}(${stateLabel(level)})`,
 						onClick: () => onToggle(level),
-					},
-					`${levelLabel(t, level)}(${stateLabel(level)})`,
-				)),
-			)
+						children: levelLabel(t, level),
+					}, level)),
+				}, 'popover'))
+			}
+
+			if (toggleError !== null) {
+				children.push(jsxRuntime.jsx('span', { style: styles.messageError, children: toggleError }, 'failure'))
+			}
+
+			return jsxRuntime.jsx('div', {
+				style: styles.wrapper,
+				'data-dsh-memory-journal-dock': resolved.level,
+				children,
+			})
 		}
 
 		function apply(ctx) {

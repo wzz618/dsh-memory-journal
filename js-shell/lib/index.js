@@ -43,7 +43,7 @@ const FALLBACK_CONFIG = {
     validate(value) {
       const issues = []
       const config = {
-        enabled: false,
+        enabled: true,
         order: 0,
         injectionBudgetChars: 4000,
         nightHour: 21,
@@ -78,8 +78,8 @@ async function loadConfigSchema() {
     const z = loaded?.default ?? loaded
     if (typeof z?.object === 'function') {
       return z.object({
-        enabled: z.boolean().default(false)
-          .description('只在 scopes.json 第一次创建时用作全局默认值；此后实际是否注入由 scopes.json（可通过设置页/composer dock 切换）决定，这个字段不再生效'),
+        enabled: z.boolean().default(true)
+          .description('只在 scopes.json 第一次创建时用作全局默认值（默认开）；此后实际是否注入由 scopes.json（可通过设置页/composer dock 切换）决定，这个字段不再生效'),
         order: z.number().default(0)
           .description('system prompt 段落顺序'),
         injectionBudgetChars: z.number().default(4000)

@@ -10,9 +10,9 @@
 # 要长期生效，把下面两条 insert 合并进
 # $DSH_HOME/profiles/<profile>/cordis.patch.yml 或 $DSH_HOME/cordis.patch.yml。
 #
-# enabled: false 是故意的默认值——装完之后需要显式对你要用的那个
-# workspace/会话打开，本插件不会对任何特定上游插件（例如某个 IM 接入插件）
-# 做特殊判断，见 README「已知限制」。
+# enabled: true 是默认值——装完之后默认对所有 workspace/会话都生效。
+# 要给某个特定的 workspace/会话单独关掉，用 composer dock（📓 状态条）
+# 或者 POST /api/dsh-memory-journal/scope，不用改这份 config。
 - insert:
     - id: memory-journal
       name: dsh-memory-journal
