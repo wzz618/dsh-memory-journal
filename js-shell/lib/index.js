@@ -21,7 +21,15 @@
  * global/workspace/session persona scoping. `config.enabled` only seeds
  * scopes.json's initial global default the first time it's created.
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -29,6 +37,12 @@ import { fileURLToPath } from 'node:url'
 const SECTION_NAME = 'memory-journal:context'
 const NUMBER_FIELDS = ['order', 'injectionBudgetChars', 'nightHour']
 const TRACKED_FILES = ['SOUL.md', 'USER.md', 'MEMORY.md']
+
+// Addressing used by the /file and /entries HTTP API, deliberately the same
+// target vocabulary py-mcp's MemoryStore uses (soul/user/memory/daily:.../
+// weekly:...) so the two halves of this plugin never drift into two
+// different naming schemes for the same files.
+const SIMPLE_TARGETS = { soul: 'SOUL.md', user: 'USER.md', memory: 'MEMORY.md' }
 
 // Seed content lives as real files under templates/ (not inline string
 // literals) so it can be opened and edited directly. SOUL.md's default
@@ -113,6 +127,17 @@ function readFileSafe(path) {
   }
 }
 
+/** Returns the file's current mtime in milliseconds, or `null` if it does
+ * not exist — used as the optimistic-concurrency token for the /file POST
+ * endpoint (see targetPath/the webServer handler below). */
+function statMtimeMs(path) {
+  try {
+    return statSync(path).mtimeMs
+  } catch {
+    return null
+  }
+}
+
 function writeFileAtomic(path, content) {
   mkdirSync(dirname(path), { recursive: true })
   const tmp = `${path}.tmp-${process.pid}-${Date.now()}`
@@ -181,16 +206,22 @@ export function resolveEnabled(scopes, { sessionId, cwd }) {
   return { enabled: scopes.global, level: 'global' }
 }
 
+/** Local-calendar YYYY-MM-DD, used consistently for the daily file path, the
+ * `daily:...` target address, and the /entries listing — never mixed with
+ * UTC getters. */
+export function isoDate(date) {
+  const year = date.getFullYear()
+  const month = date.getMonth() + 1
+  const day = date.getDate()
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+}
+
 function monthDir(dataDir, year, month) {
   return join(dataDir, 'memory', `${year}-${String(month).padStart(2, '0')}`)
 }
 
 function dailyPath(dataDir, date) {
-  const year = date.getFullYear()
-  const month = date.getMonth() + 1
-  const day = date.getDate()
-  const iso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-  return join(monthDir(dataDir, year, month), `${iso}.md`)
+  return join(monthDir(dataDir, date.getFullYear(), date.getMonth() + 1), `${isoDate(date)}.md`)
 }
 
 // ISO 8601 week helpers. Everything here stays in local-calendar time
@@ -226,9 +257,12 @@ function mondayOfIsoWeek(isoYear, isoWeek) {
   return simple
 }
 
+function weeklyLabel(isoYear, isoWeek) {
+  return `${isoYear}-W${String(isoWeek).padStart(2, '0')}`
+}
+
 function weeklyPath(dataDir, isoYear, isoWeek) {
-  const label = `${isoYear}-W${String(isoWeek).padStart(2, '0')}`
-  return join(dataDir, 'memory', 'weekly', `${label}.md`)
+  return join(dataDir, 'memory', 'weekly', `${weeklyLabel(isoYear, isoWeek)}.md`)
 }
 
 function anyDailyNoteExistsInIsoWeek(dataDir, isoYear, isoWeek) {
@@ -237,6 +271,77 @@ function anyDailyNoteExistsInIsoWeek(dataDir, isoYear, isoWeek) {
     if (existsSync(dailyPath(dataDir, addDays(monday, offset)))) return true
   }
   return false
+}
+
+/** Resolves an API target string to its file path on disk, or `null` for an
+ * unrecognized target. Shared by the /file and /entries handlers so the two
+ * endpoints can never disagree about where a target lives. */
+function targetPath(dataDir, target) {
+  if (typeof target !== 'string') return null
+  if (Object.hasOwn(SIMPLE_TARGETS, target)) return join(dataDir, SIMPLE_TARGETS[target])
+  const daily = /^daily:(\d{4})-(\d{2})-(\d{2})$/.exec(target)
+  if (daily) {
+    const [, year, month, day] = daily
+    return dailyPath(dataDir, new Date(Number(year), Number(month) - 1, Number(day)))
+  }
+  const weekly = /^weekly:(\d{4})-W(\d{2})$/.exec(target)
+  if (weekly) return weeklyPath(dataDir, Number(weekly[1]), Number(weekly[2]))
+  return null
+}
+
+/** Lists every existing daily diary entry (one per real `.md` file under
+ * `memory/YYYY-MM/`), newest first. Used by the settings-page journal
+ * browser to build its month-grouped list — never guesses at entries that
+ * do not exist on disk. */
+export function listDailyEntries(dataDir) {
+  let monthDirs
+  try {
+    monthDirs = readdirSync(join(dataDir, 'memory'), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && /^\d{4}-\d{2}$/.test(entry.name))
+  } catch {
+    return []
+  }
+  const entries = []
+  for (const monthEntry of monthDirs) {
+    const dirPath = join(dataDir, 'memory', monthEntry.name)
+    let files
+    try {
+      files = readdirSync(dirPath)
+    } catch {
+      continue
+    }
+    for (const file of files) {
+      const match = /^(\d{4}-\d{2}-\d{2})\.md$/.exec(file)
+      if (match) entries.push({ date: match[1], mtimeMs: statMtimeMs(join(dirPath, file)) })
+    }
+  }
+  entries.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
+  return entries
+}
+
+/** Lists every existing weekly journal entry (one per real `.md` file under
+ * `memory/weekly/`), newest first. */
+export function listWeeklyEntries(dataDir) {
+  let files
+  try {
+    files = readdirSync(join(dataDir, 'memory', 'weekly'))
+  } catch {
+    return []
+  }
+  const entries = []
+  for (const file of files) {
+    const match = /^(\d{4})-W(\d{2})\.md$/.exec(file)
+    if (match) {
+      entries.push({
+        isoYear: Number(match[1]),
+        isoWeek: Number(match[2]),
+        label: `${match[1]}-W${match[2]}`,
+        mtimeMs: statMtimeMs(join(dataDir, 'memory', 'weekly', file)),
+      })
+    }
+  }
+  entries.sort((a, b) => (a.label < b.label ? 1 : a.label > b.label ? -1 : 0))
+  return entries
 }
 
 const TRUNCATION_HEAD_MARKER = '\n…(更早内容已截断，完整内容可用 memory_get 查询)…'
@@ -302,11 +407,16 @@ export async function apply(ctx, config) {
     const diaryText = readFileSafe(dailyPath(dataDir, now))
     if (diaryText) parts.push(truncateKeepingTail(diaryText, config.injectionBudgetChars))
 
-    for (const file of TRACKED_FILES) {
-      if (userEditedPending.has(file)) {
+    for (const [target, file] of Object.entries(SIMPLE_TARGETS)) {
+      if (userEditedPending.has(target)) {
         parts.push(`（提示：用户刚才通过设置页修改了 ${file}，内容可能已更新。）`)
-        userEditedPending.delete(file)
+        userEditedPending.delete(target)
       }
+    }
+    const todayTarget = `daily:${isoDate(now)}`
+    if (userEditedPending.has(todayTarget)) {
+      parts.push('（提示：用户刚才通过设置页编辑了今天的日记，内容可能已更新。）')
+      userEditedPending.delete(todayTarget)
     }
 
     if (now.getHours() >= config.nightHour && !existsSync(dailyPath(dataDir, now))) {
@@ -315,8 +425,7 @@ export async function apply(ctx, config) {
 
     const { isoYear, isoWeek } = previousIsoWeek(now)
     if (!existsSync(weeklyPath(dataDir, isoYear, isoWeek)) && anyDailyNoteExistsInIsoWeek(dataDir, isoYear, isoWeek)) {
-      const label = `${isoYear}-W${String(isoWeek).padStart(2, '0')}`
-      parts.push(`（提示：${label} 这一周还没有写周记，可以读取该周每天的日记后生成一份周记。）`)
+      parts.push(`（提示：${weeklyLabel(isoYear, isoWeek)} 这一周还没有写周记，可以读取该周每天的日记后生成一份周记。）`)
     }
 
     parts.push('以上内容每次对话都会自动带上。仅当用户明确要求"记住"或"回想"某事时，才调用记忆检索/写入工具做精确操作，不需要每轮都主动查询。')
@@ -383,20 +492,39 @@ export async function apply(ctx, config) {
       },
     })
 
+    // Lists every diary/weekly entry that actually exists on disk, for the
+    // settings-page journal browser's left-hand list. memory.md/soul.md/
+    // user.md are not included here — they are singletons the client
+    // already knows about statically, addressed directly through /file.
+    scope.webServer.register({
+      kind: 'exact',
+      path: '/api/dsh-memory-journal/entries',
+      handler: (req, res) => {
+        if (!isLoopbackRequest(req)) return sendJson(res, 403, { error: 'forbidden' })
+        sendJson(res, 200, { daily: listDailyEntries(dataDir), weekly: listWeeklyEntries(dataDir) })
+      },
+    })
+
+    // Addresses any single file this plugin owns — soul/user/memory, or a
+    // specific day/week's journal entry — by the same `target` vocabulary
+    // py-mcp's MemoryStore uses. GET returns the file's current mtime
+    // alongside its content; POST must echo back the mtime it read (or
+    // `null` for a file that did not exist yet) as `expectedMtimeMs`, and is
+    // rejected with 409 if the file changed on disk since — e.g. the model
+    // wrote a diary entry through the MCP server while this was open for
+    // editing — rather than silently overwriting whichever side saved last.
     scope.webServer.register({
       kind: 'exact',
       path: '/api/dsh-memory-journal/file',
       handler: (req, res) => {
         if (!isLoopbackRequest(req)) return sendJson(res, 403, { error: 'forbidden' })
 
-        const url = new URL(req.url, 'http://localhost')
-        const fileName = url.searchParams.get('name')
-        if (!TRACKED_FILES.includes(fileName)) {
-          return sendJson(res, 400, { error: 'unknown file' })
-        }
-
         if (req.method === 'GET') {
-          return sendJson(res, 200, { name: fileName, content: readFileSafe(join(dataDir, fileName)) })
+          const url = new URL(req.url, 'http://localhost')
+          const target = url.searchParams.get('target')
+          const path = targetPath(dataDir, target)
+          if (!path) return sendJson(res, 400, { error: 'unknown target' })
+          return sendJson(res, 200, { target, content: readFileSafe(path), mtimeMs: statMtimeMs(path) })
         }
 
         if (req.method === 'POST') {
@@ -404,11 +532,19 @@ export async function apply(ctx, config) {
           req.on('data', (chunk) => { body += chunk })
           req.on('end', () => {
             try {
-              const { content } = JSON.parse(body)
+              const { target, content, expectedMtimeMs } = JSON.parse(body)
+              const path = targetPath(dataDir, target)
+              if (!path) throw new Error('unknown target')
               if (typeof content !== 'string') throw new Error('content must be a string')
-              writeFileAtomic(join(dataDir, fileName), content)
-              userEditedPending.add(fileName)
-              sendJson(res, 200, { ok: true })
+              const expected = expectedMtimeMs === undefined ? null : expectedMtimeMs
+              const currentMtimeMs = statMtimeMs(path)
+              if (currentMtimeMs !== expected) {
+                sendJson(res, 409, { ok: false, error: 'conflict', currentMtimeMs })
+                return
+              }
+              writeFileAtomic(path, content)
+              userEditedPending.add(target)
+              sendJson(res, 200, { ok: true, mtimeMs: statMtimeMs(path) })
             } catch (error) {
               sendJson(res, 400, { ok: false, error: error.message })
             }

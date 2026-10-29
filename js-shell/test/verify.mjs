@@ -9,7 +9,10 @@ import { dirname, join } from 'node:path'
 import {
   apply,
   Config,
+  isoDate,
   isoWeekInfo,
+  listDailyEntries,
+  listWeeklyEntries,
   previousIsoWeek,
   resolveEnabled,
   truncateKeepingHead,
@@ -108,12 +111,18 @@ assert.deepEqual(previousIsoWeek(nextMonday), sameWeek)
 // mondayOfIsoWeekForTest must round-trip back to the same week.
 assert.deepEqual(isoWeekInfo(mondayOfIsoWeekForTest(sameWeek.isoYear, sameWeek.isoWeek)), sameWeek)
 
+// isoDate: plain local YYYY-MM-DD, used identically by dailyPath, the
+// `daily:...` target address, and listDailyEntries below.
+assert.equal(isoDate(new Date(2026, 0, 5)), '2026-01-05')
+assert.equal(isoDate(new Date(2026, 10, 29)), '2026-11-29')
+
 const disabledDir = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
 const enabledDir = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
 const soulKeepDir = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
 const nightDir = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
 const weeklyDir = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
 const scopeDir = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
+const entriesDir = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
 try {
   // Disabled scope: the section is registered but injects nothing.
   withDataDir(disabledDir, () => {})
@@ -197,8 +206,34 @@ try {
   assert.equal(scopedText({ agent: { session: { header: { id: 'session-b', cwd: '/proj' } } } }), '',
     'an unrelated session should fall through to the global default (false)')
   assert.equal(scopedText(), '', 'no agent/session context (e.g. diagnostics) should fall through to global too')
+
+  // listDailyEntries/listWeeklyEntries: newest first, across multiple
+  // months/years, and empty (not throwing) when memory/ does not exist yet.
+  assert.deepEqual(listDailyEntries(entriesDir), [])
+  assert.deepEqual(listWeeklyEntries(entriesDir), [])
+  function localDateFromIso(label) {
+    const [year, month, day] = label.split('-').map(Number)
+    return new Date(year, month - 1, day)
+  }
+  for (const label of ['2026-09-30', '2026-10-01', '2026-10-15']) {
+    const path = dailyFilePath(entriesDir, localDateFromIso(label))
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(path, `# ${label}\n`, 'utf8')
+  }
+  const dailyEntries = listDailyEntries(entriesDir)
+  assert.deepEqual(dailyEntries.map((entry) => entry.date), ['2026-10-15', '2026-10-01', '2026-09-30'])
+  assert.ok(dailyEntries.every((entry) => typeof entry.mtimeMs === 'number'))
+
+  for (const label of ['2025-W52', '2026-W01', '2026-W10']) {
+    const path = join(entriesDir, 'memory', 'weekly', `${label}.md`)
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(path, `# ${label}\n`, 'utf8')
+  }
+  const weeklyEntries = listWeeklyEntries(entriesDir)
+  assert.deepEqual(weeklyEntries.map((entry) => entry.label), ['2026-W10', '2026-W01', '2025-W52'])
+  assert.ok(weeklyEntries.every((entry) => typeof entry.mtimeMs === 'number'))
 } finally {
-  for (const dir of [disabledDir, enabledDir, soulKeepDir, nightDir, weeklyDir, scopeDir]) {
+  for (const dir of [disabledDir, enabledDir, soulKeepDir, nightDir, weeklyDir, scopeDir, entriesDir]) {
     rmSync(dir, { recursive: true, force: true })
   }
   delete process.env.DSH_MEMORY_JOURNAL_DATA_DIR

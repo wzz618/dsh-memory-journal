@@ -43,8 +43,21 @@ injection is governed by `scopes.json` itself (see below), editable in
   fires on the next turn someone talks to it.
 - Shows a 📓 status chip under the composer (`conversation.composer.dock`)
   with on/off toggles for global/workspace/session.
-- `GET`/`POST /api/dsh-memory-journal/file?name=<SOUL.md|USER.md|MEMORY.md>`
-  and `POST /api/dsh-memory-journal/scope` (loopback only).
+- Adds a "Memory" page to the Web client's Settings dialog
+  (`settings.section`) for browsing every diary/weekly entry that exists
+  (newest month/year expanded, a missing current day/week shown as a
+  clickable placeholder) and `MEMORY.md`/`SOUL.md`/`USER.md`, with in-place
+  view/edit toggling for every one of them.
+- `GET /api/dsh-memory-journal/entries` lists every existing diary/weekly
+  entry (date or ISO week label plus mtime), for the settings page's list.
+- `GET`/`POST /api/dsh-memory-journal/file?target=<soul|user|memory|daily:YYYY-MM-DD|weekly:YYYY-Www>`
+  reads or writes one file by the same target vocabulary py-mcp's
+  `MemoryStore` uses. `POST` takes `{ target, content, expectedMtimeMs }`:
+  `expectedMtimeMs` must be the mtime the caller last read for that target
+  (or `null` for one that didn't exist yet) — a save is rejected with `409`
+  if the file changed on disk since, instead of silently overwriting a
+  concurrent write (e.g. from the MCP server).
+- `POST /api/dsh-memory-journal/scope` (loopback only, same as above).
 
 See the [repo README](../README.md) for the full picture, including the
 companion MCP server and known limitations.

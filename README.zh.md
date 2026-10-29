@@ -18,7 +18,8 @@ Cordis 的 in-process 里（`ctx.systemPrompt`、`ctx.webServer`），而"模型
 
 - **[js-shell/](js-shell)**：极薄的 Cordis 插件。生成并注入
   `SOUL.md`/`USER.md`/`MEMORY.md`/今天的日记，提供 loopback-only 的 HTTP
-  API 查看/编辑。
+  API 查看/编辑，并在 Web 客户端里加了一个"记忆"设置页和一个 composer
+  dock 状态条。
 - **[py-mcp/](py-mcp)**：独立的 Python MCP server，暴露
   `memory_search`/`memory_get`/`memory_write`/`memory_weeks_missing_journal`，
   通过 DSH 通用的 `@deepseek-ai/dsh-mcp-client` 桥接接入，不含任何
@@ -74,13 +75,14 @@ js-shell 的 `dataDir` config 字段和 py-mcp 的
   检查。
 - 用户编辑检测只覆盖通过 js-shell 自己的 HTTP API 做的编辑，不包括直接
   改磁盘文件。
-- 还没有查看/编辑 SOUL.md/USER.md/MEMORY.md/日记的设置页，目前只有
-  composer dock 的开关和裸的 HTTP API。
+- 如果一个文件在编辑期间被别处改动了（比如设置页打开着一篇日记，模型
+  同时通过 MCP server 写了同一篇），保存会被拒绝而不是自动合并——人得
+  自己刷新后重新编辑，没有冲突解决 UI，只有"拒绝+提示刷新"。
 - 不做多联系人隔离——同一个 DSH 实例的所有人共享同一份记忆，这是故意的
   设计取舍。
 - `MEMORY.md` 永不自动裁剪，只有注入的副本会被截断。
-- composer dock 还没在真实浏览器里视觉验证过（这个环境没有 GUI）——请在
-  真实的 `dsh web` 里确认一遍。
+- composer dock 和"记忆"设置页都还没在真实浏览器里视觉验证过（这个环境
+  没有 GUI）——请在真实的 `dsh web` 里都确认一遍。
 
 更详细的内容见 [`js-shell/README.zh.md`](js-shell/README.zh.md) 和
 [`py-mcp/README.zh.md`](py-mcp/README.zh.md)。

@@ -22,7 +22,8 @@ through the language-agnostic MCP protocol instead. So:
 
 - **[js-shell/](js-shell)** — a thin Cordis plugin. Seeds and injects
   `SOUL.md`/`USER.md`/`MEMORY.md`/today's diary into every system prompt,
-  and exposes a loopback-only HTTP API to view/edit them.
+  exposes a loopback-only HTTP API to view/edit them, and adds a "Memory"
+  settings-page section plus a composer-dock status chip to the Web client.
 - **[py-mcp/](py-mcp)** — a standalone Python MCP server exposing
   `memory_search`/`memory_get`/`memory_write`/`memory_weeks_missing_journal`,
   wired in through DSH's generic `@deepseek-ai/dsh-mcp-client` bridge. No
@@ -80,13 +81,16 @@ directory: js-shell's `dataDir` config field and py-mcp's
   they only fire the next time someone talks to it.
 - User-edit detection only covers edits made through js-shell's own HTTP
   API, not direct file edits.
-- No settings-page UI for viewing/editing SOUL.md/USER.md/MEMORY.md/diaries
-  yet — only the composer-dock on/off toggle and the raw HTTP API.
+- Editing a file that changed on disk since it was loaded (e.g. the model
+  wrote a diary entry through the MCP server while the settings page had it
+  open) is rejected rather than merged — the person has to reload and redo
+  the edit. There is no conflict-resolution UI, just refuse-and-reload.
 - No multi-contact isolation — everyone sharing a DSH instance shares the
   same memory, by design.
 - `MEMORY.md` is never auto-pruned; only the injected copy is truncated.
-- The composer dock has not been visually verified in a real browser (this
-  environment has no GUI) — check it once in a real `dsh web` session.
+- Neither the composer dock nor the "Memory" settings-page section has been
+  visually verified in a real browser (this environment has no GUI) — check
+  both once in a real `dsh web` session.
 
 See [`js-shell/README.md`](js-shell/README.md) and
 [`py-mcp/README.md`](py-mcp/README.md) for package-level detail.
