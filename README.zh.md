@@ -24,13 +24,14 @@ Cordis 的 in-process 里（`ctx.systemPrompt`、`ctx.webServer`），而"模型
   通过 DSH 通用的 `@deepseek-ai/dsh-mcp-client` 桥接接入，不含任何
   Cordis/JS 代码。
 
-两边共享同一个磁盘目录（默认 `~/.dsh-memory-journal/`），互不依赖对方的
-运行时。
+两边共享同一个磁盘目录——`$DSH_HOME/storages/dsh-memory-journal/`（默认
+`~/.dsh/storages/dsh-memory-journal/`，和 dsh-persona-dafeiyu 用的
+`$DSH_HOME/storages/<插件名>` 布局一致），互不依赖对方的运行时。
 
 ## 存储结构
 
 ```
-~/.dsh-memory-journal/
+~/.dsh/storages/dsh-memory-journal/
 ├─ SOUL.md                      # 人设——装完即生成真实的起始人设
 ├─ USER.md                      # 用户偏好——装完即生成骨架
 ├─ MEMORY.md                    # 长期记忆——装完即生成骨架
@@ -66,7 +67,7 @@ dsh web --patch "$PWD/examples/dsh-memory-journal.cordis.yml"
 `POST /api/dsh-memory-journal/scope`。两个包必须指向同一个目录：
 js-shell 的 `dataDir` config 字段和 py-mcp 的
 `DSH_MEMORY_JOURNAL_DATA_DIR` 环境变量（都不设置时默认是
-`~/.dsh-memory-journal`）。
+`~/.dsh/storages/dsh-memory-journal`）。
 
 ## 已知限制
 

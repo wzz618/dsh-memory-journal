@@ -26,9 +26,9 @@
         command: dsh-memory-journal
         args: []
         # js-shell 和 py-mcp 必须指向同一个记忆目录。两边都默认用
-        # ~/.dsh-memory-journal，不覆盖就是一致的；如果上面
-        # memory-journal 插件的 config.dataDir 改了，这里也要加
-        # DSH_MEMORY_JOURNAL_DATA_DIR 指向同一个路径，否则两边会读写
-        # 不同的文件。
+        # $DSH_HOME/storages/dsh-memory-journal（即 ~/.dsh/storages/dsh-memory-journal），
+        # 不覆盖就是一致的；如果上面 memory-journal 插件的 config.dataDir
+        # 改了，这里也要加 DSH_MEMORY_JOURNAL_DATA_DIR 指向同一个路径，
+        # 否则两边会读写不同的文件。
         env: {}
         cwd: !!js process.cwd()

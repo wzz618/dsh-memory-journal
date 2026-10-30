@@ -25,7 +25,8 @@ tool's docstring documents the exact `target` values (`soul`, `user`,
 `memory`, `daily`, `daily:YYYY-MM-DD`, `weekly`, `weekly:YYYY-Www`).
 
 This package and js-shell must point at the same data directory via
-`DSH_MEMORY_JOURNAL_DATA_DIR` (default `~/.dsh-memory-journal`).
+`DSH_MEMORY_JOURNAL_DATA_DIR` (default
+`~/.dsh/storages/dsh-memory-journal`, under `$DSH_HOME`).
 
 See the [repo README](../README.md) for the full picture.
 

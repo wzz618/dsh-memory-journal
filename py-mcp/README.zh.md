@@ -24,7 +24,7 @@ pip install dsh-memory-journal
 docstring。
 
 这个包和 js-shell 必须通过 `DSH_MEMORY_JOURNAL_DATA_DIR`（默认
-`~/.dsh-memory-journal`）指向同一个目录。
+`~/.dsh/storages/dsh-memory-journal`，在 `$DSH_HOME` 下）指向同一个目录。
 
 完整图景见[仓库 README](../README.md)。
 

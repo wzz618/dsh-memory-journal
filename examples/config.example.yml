@@ -3,7 +3,7 @@ enabled: true               # 只在 scopes.json 第一次创建时用作全局�
 order: 0                    # system prompt 段落顺序
 injectionBudgetChars: 4000  # SOUL.md/USER.md/MEMORY.md 各自独立的字符预算；超出只截断注入副本的结尾，磁盘原文不变
 nightHour: 21               # 几点（本机时区）之后提示模型今天的日记还没写
-dataDir: ''                 # 留空则用 ~/.dsh-memory-journal，也可用环境变量 DSH_MEMORY_JOURNAL_DATA_DIR 覆盖
+dataDir: ''                 # 留空则用 $DSH_HOME/storages/dsh-memory-journal（默认 ~/.dsh/storages/dsh-memory-journal），也可用环境变量 DSH_MEMORY_JOURNAL_DATA_DIR 覆盖
 
 # py-mcp（dsh-memory-journal 可执行文件）不读这份 config——它只认
 # DSH_MEMORY_JOURNAL_DATA_DIR 环境变量（同上，两边要指向同一个目录）。

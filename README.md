@@ -30,13 +30,15 @@ through the language-agnostic MCP protocol instead. So:
   wired in through DSH's generic `@deepseek-ai/dsh-mcp-client` bridge. No
   Cordis/JS code.
 
-Both share one on-disk directory (default `~/.dsh-memory-journal/`) and
-don't depend on each other's runtime.
+Both share one on-disk directory — `$DSH_HOME/storages/dsh-memory-journal/`
+(default `~/.dsh/storages/dsh-memory-journal/`, the same
+`$DSH_HOME/storages/<plugin>` layout dsh-persona-dafeiyu uses) — and don't
+depend on each other's runtime.
 
 ## Storage layout
 
 ```
-~/.dsh-memory-journal/
+~/.dsh/storages/dsh-memory-journal/
 ├─ SOUL.md                      # persona — seeded with a real starting persona
 ├─ USER.md                      # user preferences — seeded with a skeleton
 ├─ MEMORY.md                    # long-term facts — seeded with a skeleton
@@ -74,7 +76,7 @@ status chip (📓) under the message box, or directly via `POST
 /api/dsh-memory-journal/scope`. Both packages must point at the same
 directory: js-shell's `dataDir` config field and py-mcp's
 `DSH_MEMORY_JOURNAL_DATA_DIR` env var (both default to
-`~/.dsh-memory-journal` when unset).
+`~/.dsh/storages/dsh-memory-journal` when unset).
 
 ## Known limitations
 

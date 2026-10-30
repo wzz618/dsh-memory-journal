@@ -38,9 +38,15 @@ _SEEDED_FILES = ("SOUL.md", "USER.md", "MEMORY.md")
 
 def resolve_data_dir() -> Path:
     override = os.environ.get("DSH_MEMORY_JOURNAL_DATA_DIR")
-    if override:
+    if override and override.strip():
         return Path(override).expanduser()
-    return Path.home() / ".dsh-memory-journal"
+    # Same "$DSH_HOME/storages/<plugin>" layout dsh-persona-dafeiyu uses for
+    # its own data, so every DSH plugin's files sit together under one home.
+    # A blank DSH_HOME counts as unset, matching @deepseek-ai/dsh-home-paths'
+    # resolveDshHome in the host half.
+    dsh_home = os.environ.get("DSH_HOME")
+    home = Path(dsh_home).expanduser() if dsh_home and dsh_home.strip() else Path.home() / ".dsh"
+    return home / "storages" / "dsh-memory-journal"
 
 
 def _write_atomic(path: Path, content: str) -> None:

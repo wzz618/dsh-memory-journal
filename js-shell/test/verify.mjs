@@ -3,7 +3,7 @@
 // touches the developer's real ~/.dsh-memory-journal directory.
 import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 import {
@@ -14,6 +14,7 @@ import {
   listDailyEntries,
   listWeeklyEntries,
   previousIsoWeek,
+  resolveDataDir,
   resolveEnabled,
   truncateKeepingHead,
   truncateKeepingTail,
@@ -46,7 +47,7 @@ function dailyFilePath(dataDir, date) {
   return join(dataDir, 'memory', label.slice(0, 7), `${label}.md`)
 }
 
-function makeFakeCtx() {
+function makeFakeCtx(options = {}) {
   let section = null
   let webServerCallback = null
   return {
@@ -56,6 +57,8 @@ function makeFakeCtx() {
     inject: (deps, callback) => {
       if (deps.includes('webServer')) webServerCallback = callback
     },
+    // Mirrors Cordis's optional-service read; absent unless a test supplies it.
+    get: (name) => (name === 'dshHomePath' ? options.dshHomePath : undefined),
     getSection: () => section,
     hasWebServerCallback: () => webServerCallback !== null,
   }
@@ -116,6 +119,32 @@ assert.deepEqual(isoWeekInfo(mondayOfIsoWeekForTest(sameWeek.isoYear, sameWeek.i
 assert.equal(isoDate(new Date(2026, 0, 5)), '2026-01-05')
 assert.equal(isoDate(new Date(2026, 10, 29)), '2026-11-29')
 
+// resolveDataDir: an explicit dataDir wins, then the dedicated env override,
+// then the host's own dshHomePath result. The last is what a real harness
+// hands over via ctx.get('dshHomePath'), so the plugin follows whatever home
+// the host resolved instead of re-deriving it.
+assert.equal(resolveDataDir({ dataDir: '/explicit' }, (...s) => `/host/${s.join('/')}`), '/explicit')
+const savedDataDirOverride = process.env.DSH_MEMORY_JOURNAL_DATA_DIR
+const savedDshHome = process.env.DSH_HOME
+try {
+  process.env.DSH_MEMORY_JOURNAL_DATA_DIR = '/from-env'
+  assert.equal(resolveDataDir({ dataDir: '' }, (...s) => `/host/${s.join('/')}`), '/from-env')
+  delete process.env.DSH_MEMORY_JOURNAL_DATA_DIR
+  assert.equal(resolveDataDir({ dataDir: '' }, (...s) => `/host/${s.join('/')}`), '/host/storages/dsh-memory-journal')
+  // Without the host service, fall back to DSH's own documented rule.
+  assert.equal(resolveDataDir({ dataDir: '' }), join(homedir(), '.dsh', 'storages', 'dsh-memory-journal'))
+  // A blank $DSH_HOME is unset, not the current working directory.
+  process.env.DSH_HOME = '   '
+  assert.equal(resolveDataDir({ dataDir: '' }), join(homedir(), '.dsh', 'storages', 'dsh-memory-journal'))
+  process.env.DSH_HOME = '/custom/home'
+  assert.equal(resolveDataDir({ dataDir: '' }), '/custom/home/storages/dsh-memory-journal')
+} finally {
+  if (savedDataDirOverride === undefined) delete process.env.DSH_MEMORY_JOURNAL_DATA_DIR
+  else process.env.DSH_MEMORY_JOURNAL_DATA_DIR = savedDataDirOverride
+  if (savedDshHome === undefined) delete process.env.DSH_HOME
+  else process.env.DSH_HOME = savedDshHome
+}
+
 const disabledDir = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
 const enabledDir = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
 const soulKeepDir = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
@@ -123,6 +152,7 @@ const nightDir = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
 const weeklyDir = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
 const scopeDir = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
 const entriesDir = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
+const hostHomeDir = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
 try {
   // Disabled scope: the section is registered but injects nothing.
   withDataDir(disabledDir, () => {})
@@ -207,6 +237,16 @@ try {
     'an unrelated session should fall through to the global default (false)')
   assert.equal(scopedText(), '', 'no agent/session context (e.g. diagnostics) should fall through to global too')
 
+  // When the host provides dshHomePath, the plugin stores under the home the
+  // harness itself resolved — no env var, no hardcoded path here.
+  delete process.env.DSH_MEMORY_JOURNAL_DATA_DIR
+  const hostCtx = makeFakeCtx({ dshHomePath: (...segments) => join(hostHomeDir, ...segments) })
+  await apply(hostCtx, await validateConfig({ enabled: true }))
+  for (const file of SEEDED_FILES) {
+    assert.ok(readFileSync(join(hostHomeDir, 'storages', 'dsh-memory-journal', file), 'utf8').length > 0,
+      `${file} should be seeded under the host-resolved home`)
+  }
+
   // listDailyEntries/listWeeklyEntries: newest first, across multiple
   // months/years, and empty (not throwing) when memory/ does not exist yet.
   assert.deepEqual(listDailyEntries(entriesDir), [])
@@ -233,7 +273,7 @@ try {
   assert.deepEqual(weeklyEntries.map((entry) => entry.label), ['2026-W10', '2026-W01', '2025-W52'])
   assert.ok(weeklyEntries.every((entry) => typeof entry.mtimeMs === 'number'))
 } finally {
-  for (const dir of [disabledDir, enabledDir, soulKeepDir, nightDir, weeklyDir, scopeDir, entriesDir]) {
+  for (const dir of [disabledDir, enabledDir, soulKeepDir, nightDir, weeklyDir, scopeDir, entriesDir, hostHomeDir]) {
     rmSync(dir, { recursive: true, force: true })
   }
   delete process.env.DSH_MEMORY_JOURNAL_DATA_DIR

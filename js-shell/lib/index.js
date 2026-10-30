@@ -31,7 +31,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const SECTION_NAME = 'memory-journal:context'
@@ -101,7 +101,7 @@ async function loadConfigSchema() {
         nightHour: z.number().default(21)
           .description('几点（24 小时制，本机时区）之后视为"晚上"，用于提示模型今天的日记还没写'),
         dataDir: z.string().default('')
-          .description('记忆文件目录，留空则使用 ~/.dsh-memory-journal 或 DSH_MEMORY_JOURNAL_DATA_DIR'),
+          .description('记忆文件目录，留空则使用 $DSH_HOME/storages/dsh-memory-journal（默认 ~/.dsh/storages/dsh-memory-journal）或 DSH_MEMORY_JOURNAL_DATA_DIR'),
       })
     }
   } catch {
@@ -114,9 +114,35 @@ export const name = 'dsh-memory-journal'
 export const inject = ['systemPrompt']
 export const Config = await loadConfigSchema()
 
-export function resolveDataDir(config) {
+/** DSH's own home-resolution rule (see @deepseek-ai/dsh-home-paths'
+ * resolveDshHome): an explicit path wins, then a non-blank `$DSH_HOME`, then
+ * `~/.dsh`. Only a fallback — a real host hands the plugin its already
+ * resolved `dshHomePath` (see resolveDataDir), so the memory directory
+ * follows whatever home the harness itself chose. `.trim()` matters so a
+ * blank env var never resolves the home to the current working directory. */
+function fallbackResolveDshHome() {
+  const fromEnv = process.env.DSH_HOME
+  const selected = fromEnv !== undefined && fromEnv.trim().length > 0 ? fromEnv : join(homedir(), '.dsh')
+  return resolve(selected)
+}
+
+/**
+ * Resolves the memory directory. Precedence: the plugin's explicit
+ * `dataDir`, then `$DSH_MEMORY_JOURNAL_DATA_DIR` (py-mcp's only override,
+ * and the one both halves share), then `$DSH_HOME/storages/dsh-memory-journal`
+ * — the same `$DSH_HOME/storages/<plugin>` layout dsh-persona-dafeiyu uses,
+ * so every DSH plugin's files sit together under one home.
+ * @param config - resolved plugin config.
+ * @param dshHomePath - the host's `dshHomePath` service when the boot layer
+ * provides it (`ctx.get('dshHomePath')`), which joins segments onto the
+ * harness home it actually resolved.
+ */
+export function resolveDataDir(config, dshHomePath) {
   if (config.dataDir) return config.dataDir
-  return process.env.DSH_MEMORY_JOURNAL_DATA_DIR || join(homedir(), '.dsh-memory-journal')
+  if (process.env.DSH_MEMORY_JOURNAL_DATA_DIR) return process.env.DSH_MEMORY_JOURNAL_DATA_DIR
+  const segments = ['storages', 'dsh-memory-journal']
+  if (typeof dshHomePath === 'function') return dshHomePath(...segments)
+  return join(fallbackResolveDshHome(), ...segments)
 }
 
 function readFileSafe(path) {
@@ -382,7 +408,10 @@ function sendJson(res, status, body) {
  * detect.
  */
 export async function apply(ctx, config) {
-  const dataDir = resolveDataDir(config)
+  // `dshHomePath` is an optional service: the boot layer provides it, but a
+  // hand-composed test context may not, so read it through ctx.get.
+  const dshHomePath = typeof ctx.get === 'function' ? ctx.get('dshHomePath') : undefined
+  const dataDir = resolveDataDir(config, dshHomePath)
   seedFilesIfMissing(dataDir)
   seedScopesIfMissing(dataDir, config)
   const userEditedPending = new Set()
