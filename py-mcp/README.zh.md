@@ -21,7 +21,8 @@ pip install dsh-memory-journal
 只有用户明确要求"记住"/"回想"，或者要写今晚的日记/本周的周记时才该调用
 这些工具——具体 `target` 取值（`soul`、`user`、`memory`、`daily`、
 `daily:YYYY-MM-DD`、`weekly`、`weekly:YYYY-Www`）见每个工具自己的
-docstring。
+docstring。`target` 或 `mode` 写错时会返回一条列出合法取值的错误信息，
+模型不用靠猜就能改正。
 
 这个包和 js-shell 必须通过 `DSH_MEMORY_JOURNAL_DATA_DIR`（默认
 `~/.dsh/storages/dsh-memory-journal`，在 `$DSH_HOME` 下）指向同一个目录。

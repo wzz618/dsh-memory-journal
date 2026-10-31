@@ -120,13 +120,19 @@ class MemoryStore:
         daily_match = _DAILY_TARGET.fullmatch(target)
         if daily_match:
             year, month, day = (int(part) for part in daily_match.groups())
-            return self._daily_path(date(year, month, day))
+            try:
+                selected = date(year, month, day)
+            except ValueError as error:
+                raise ValueError(f"invalid date in target {target!r}: {error}") from error
+            return self._daily_path(selected)
         if target == "weekly":
             iso_year, iso_week, _ = date.today().isocalendar()
             return self._weekly_path(iso_year, iso_week)
         weekly_match = _WEEKLY_TARGET.fullmatch(target)
         if weekly_match:
             iso_year, iso_week = (int(part) for part in weekly_match.groups())
+            if not 1 <= iso_week <= 53:
+                raise ValueError(f"ISO week out of range in target {target!r}: expected W01-W53")
             return self._weekly_path(iso_year, iso_week)
         raise ValueError(
             f"unknown memory target: {target!r} "

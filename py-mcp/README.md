@@ -22,7 +22,9 @@ pip install dsh-memory-journal
 Call these tools only when the user explicitly asks to remember/recall
 something, or when writing tonight's diary / this week's journal — each
 tool's docstring documents the exact `target` values (`soul`, `user`,
-`memory`, `daily`, `daily:YYYY-MM-DD`, `weekly`, `weekly:YYYY-Www`).
+`memory`, `daily`, `daily:YYYY-MM-DD`, `weekly`, `weekly:YYYY-Www`). A
+malformed `target` or `mode` comes back as an error result naming the valid
+values, so the model can retry without guessing.
 
 This package and js-shell must point at the same data directory via
 `DSH_MEMORY_JOURNAL_DATA_DIR` (default

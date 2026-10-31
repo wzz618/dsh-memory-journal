@@ -9,12 +9,21 @@ the model actually reads.
 """
 from __future__ import annotations
 
+from functools import lru_cache
+
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
 from .store import MemoryStore
 
 mcp = MCPServer("dsh-memory-journal")
-_store = MemoryStore()
+
+
+@lru_cache(maxsize=1)
+def _store() -> MemoryStore:
+    """Opens the store on first tool call, so importing this module — which the
+    MCP bridge does at every DSH boot — never creates or seeds a data directory."""
+    return MemoryStore()
 
 
 @mcp.tool()
@@ -27,7 +36,7 @@ def memory_search(query: str) -> list[dict]:
 
     返回命中的 {file, line, text} 列表。
     """
-    return _store.search(query)
+    return _store().search(query)
 
 
 @mcp.tool()
@@ -38,8 +47,13 @@ def memory_get(target: str) -> str:
     - "soul" / "user" / "memory"：对应 SOUL.md / USER.md / MEMORY.md
     - "daily"：今天的日记；"daily:YYYY-MM-DD"：指定日期的日记
     - "weekly"：本周的周记；"weekly:YYYY-Www"：指定 ISO 周（例如 "2026-W43"）
+
+    target 写错时，工具会返回一条列出合法取值的错误信息。
     """
-    return _store.get(target)
+    try:
+        return _store().get(target)
+    except ValueError as error:
+        raise ToolError(str(error)) from error
 
 
 @mcp.tool()
@@ -58,18 +72,20 @@ def memory_write(target: str, content: str, mode: str = "append") -> dict:
 
     mode 为 "append"（默认，追加一行/一段）或 "replace"（整篇覆盖，通常用于
     写周记全文）。
+
+    target 或 mode 写错时，工具会返回一条列出合法取值的错误信息。
     """
     try:
-        _store.write(target, content, mode)
-        return {"ok": True}
+        _store().write(target, content, mode)
     except ValueError as error:
-        return {"ok": False, "error": str(error)}
+        raise ToolError(str(error)) from error
+    return {"ok": True}
 
 
 @mcp.tool()
 def memory_weeks_missing_journal() -> list[str]:
     """列出哪些已经结束的 ISO 周（YYYY-Www）已经有日记但还没有周记，供决定是否要补一份。"""
-    return _store.weeks_missing_journal()
+    return _store().weeks_missing_journal()
 
 
 def main() -> None:

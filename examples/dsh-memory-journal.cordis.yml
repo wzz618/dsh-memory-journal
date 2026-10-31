@@ -25,10 +25,14 @@
         transport: stdio
         command: dsh-memory-journal
         args: []
-        # js-shell 和 py-mcp 必须指向同一个记忆目录。两边都默认用
-        # $DSH_HOME/storages/dsh-memory-journal（即 ~/.dsh/storages/dsh-memory-journal），
-        # 不覆盖就是一致的；如果上面 memory-journal 插件的 config.dataDir
-        # 改了，这里也要加 DSH_MEMORY_JOURNAL_DATA_DIR 指向同一个路径，
-        # 否则两边会读写不同的文件。
+        # js-shell 和 py-mcp 必须指向同一个记忆目录，两边都不覆盖时默认是
+        # ~/.dsh/storages/dsh-memory-journal，天然一致。
+        #
+        # 注意：dsh-mcp-client 启动子进程时会清掉所有 DSH_* 变量，所以父进程里的
+        # DSH_HOME / DSH_MEMORY_JOURNAL_DATA_DIR 传不进这个 MCP server。只有当你
+        # 改了 $DSH_HOME，或者给上面 memory-journal 插件设了 config.dataDir，
+        # 才需要在这里写死同一个绝对路径，否则两边会读写不同的文件：
+        #   env:
+        #     DSH_MEMORY_JOURNAL_DATA_DIR: /your/dsh/home/storages/dsh-memory-journal
         env: {}
         cwd: !!js process.cwd()
