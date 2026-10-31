@@ -91,7 +91,8 @@ js-shell 的 `dataDir` config 字段和 py-mcp 的
   没有 GUI）——请在真实的 `dsh web` 里都确认一遍。
 
 更详细的内容见 [`js-shell/README.zh.md`](js-shell/README.zh.md) 和
-[`py-mcp/README.zh.md`](py-mcp/README.zh.md)。
+[`py-mcp/README.zh.md`](py-mcp/README.zh.md)；发版步骤见
+[`RELEASING.md`](RELEASING.md)。
 
 ## License
 

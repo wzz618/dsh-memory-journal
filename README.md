@@ -104,7 +104,8 @@ new starts that directory on its own.
   both once in a real `dsh web` session.
 
 See [`js-shell/README.md`](js-shell/README.md) and
-[`py-mcp/README.md`](py-mcp/README.md) for package-level detail.
+[`py-mcp/README.md`](py-mcp/README.md) for package-level detail, and
+[`RELEASING.md`](RELEASING.md) for the release procedure.
 
 ## License
 
