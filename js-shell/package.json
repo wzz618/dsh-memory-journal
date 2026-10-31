@@ -1,6 +1,6 @@
 {
   "name": "dsh-memory-journal",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "轻量日记式长期记忆插件 for DeepSeek Harness：每次对话自动注入，内容随对话持续自我迭代，设置页可直接浏览与编辑。显式检索/写入工具由配套的 Python MCP server（py-mcp/）提供。",
   "type": "module",
   "main": "lib/index.js",
