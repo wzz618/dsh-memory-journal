@@ -78,6 +78,13 @@ directory: js-shell's `dataDir` config field and py-mcp's
 `DSH_MEMORY_JOURNAL_DATA_DIR` env var (both default to
 `~/.dsh/storages/dsh-memory-journal` when unset).
 
+Installs from before 0.1.0 kept their files in `~/.dsh-memory-journal`. When
+that directory still exists and the plugin is using its default location,
+startup copies whatever the new directory is missing (nothing is overwritten,
+and the old directory is left untouched), so an upgrade does not look like a
+reset. Nothing else is migrated: pointing `dataDir` or the env var somewhere
+new starts that directory on its own.
+
 ## Known limitations
 
 - Nightly diary / weekly journal nudges are reactive, not a real scheduler —

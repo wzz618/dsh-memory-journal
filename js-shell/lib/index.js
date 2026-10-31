@@ -22,11 +22,13 @@
  * scopes.json's initial global default the first time it's created.
  */
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
   renameSync,
+  rmdirSync,
   statSync,
   writeFileSync,
 } from 'node:fs'
@@ -138,11 +140,119 @@ function fallbackResolveDshHome() {
  * harness home it actually resolved.
  */
 export function resolveDataDir(config, dshHomePath) {
-  if (config.dataDir) return config.dataDir
-  if (process.env.DSH_MEMORY_JOURNAL_DATA_DIR) return process.env.DSH_MEMORY_JOURNAL_DATA_DIR
+  if (config.dataDir) return resolve(config.dataDir)
+  if (process.env.DSH_MEMORY_JOURNAL_DATA_DIR) return resolve(process.env.DSH_MEMORY_JOURNAL_DATA_DIR)
   const segments = ['storages', 'dsh-memory-journal']
   if (typeof dshHomePath === 'function') return dshHomePath(...segments)
   return join(fallbackResolveDshHome(), ...segments)
+}
+
+/** True when the directory came from the plugin's own defaults rather than an
+ * explicit `dataDir` or env override — the only case where copying an older
+ * install's files in is what the user means. */
+function usesDefaultDataDir(config) {
+  return !config.dataDir && !process.env.DSH_MEMORY_JOURNAL_DATA_DIR
+}
+
+/** Copies files from a directory tree into another, skipping anything that
+ * already exists at the destination. Never modifies or removes the source. */
+function copyMissingFiles(from, to) {
+  let entries
+  try {
+    entries = readdirSync(from, { withFileTypes: true })
+  } catch {
+    return 0
+  }
+  let copied = 0
+  for (const entry of entries) {
+    if (entry.name.startsWith('.')) continue // lock dirs and stray temp files
+    const source = join(from, entry.name)
+    const destination = join(to, entry.name)
+    if (entry.isDirectory()) {
+      copied += copyMissingFiles(source, destination)
+      continue
+    }
+    if (!entry.isFile() || existsSync(destination)) continue
+    try {
+      mkdirSync(dirname(destination), { recursive: true })
+      copyFileSync(source, destination)
+      copied += 1
+    } catch {
+      // An unreadable file stays missing rather than aborting the rest.
+    }
+  }
+  return copied
+}
+
+/** One-time carry-over from the pre-0.1.0 default directory
+ * (`~/.dsh-memory-journal`) into the current `$DSH_HOME/storages/...` one.
+ * Without it, upgrading silently starts a fresh memory directory and the old
+ * diaries look lost. Copy, never move: the old directory stays intact. */
+function migrateLegacyDataDir(dataDir) {
+  const legacyDir = join(homedir(), '.dsh-memory-journal')
+  if (!existsSync(legacyDir) || resolve(legacyDir) === resolve(dataDir)) return
+  const copied = copyMissingFiles(legacyDir, dataDir)
+  if (copied > 0) {
+    console.warn(`[dsh-memory-journal] copied ${copied} file(s) from ${legacyDir} to ${dataDir}`)
+  }
+}
+
+// Shared with py-mcp's MemoryStore, which creates the same directory: without
+// one lock across both processes, an append (read-modify-write) and a
+// settings-page save can interleave and lose one side's content.
+const LOCK_DIRNAME = '.write.lock'
+const LOCK_STALE_MS = 30_000
+const LOCK_WAIT_MS = 1_000
+const LOCK_RETRY_MS = 10
+
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+/** Runs `fn` while holding the memory directory's write lock, waiting up to
+ * LOCK_WAIT_MS for another process to release it. Exported so the offline
+ * verification can exercise stale-lock reclaim without an HTTP server. */
+export function withWriteLock(dataDir, fn) {
+  mkdirSync(dataDir, { recursive: true })
+  const lockPath = join(dataDir, LOCK_DIRNAME)
+  const deadline = Date.now() + LOCK_WAIT_MS
+  for (;;) {
+    try {
+      mkdirSync(lockPath)
+      break
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error
+      let stale = false
+      try {
+        stale = Date.now() - statSync(lockPath).mtimeMs > LOCK_STALE_MS
+      } catch {
+        continue // released between the failed mkdir and the stat
+      }
+      if (stale) {
+        try {
+          rmdirSync(lockPath)
+        } catch {
+          // Another waiter removed it first; the next attempt decides.
+        }
+        continue
+      }
+      if (Date.now() >= deadline) {
+        const busy = new Error('另一个进程正在写入记忆文件，请稍后重试')
+        busy.code = 'WRITE_LOCK_BUSY'
+        throw busy
+      }
+      sleepSync(LOCK_RETRY_MS)
+    }
+  }
+  try {
+    return fn()
+  } finally {
+    try {
+      rmdirSync(lockPath)
+    } catch {
+      // Lost the race to a stale-lock cleanup; the directory is already gone.
+    }
+  }
 }
 
 function readFileSafe(path) {
@@ -412,6 +522,7 @@ export async function apply(ctx, config) {
   // hand-composed test context may not, so read it through ctx.get.
   const dshHomePath = typeof ctx.get === 'function' ? ctx.get('dshHomePath') : undefined
   const dataDir = resolveDataDir(config, dshHomePath)
+  if (usesDefaultDataDir(config)) migrateLegacyDataDir(dataDir)
   seedFilesIfMissing(dataDir)
   seedScopesIfMissing(dataDir, config)
   const userEditedPending = new Set()
@@ -566,16 +677,27 @@ export async function apply(ctx, config) {
               if (!path) throw new Error('unknown target')
               if (typeof content !== 'string') throw new Error('content must be a string')
               const expected = expectedMtimeMs === undefined ? null : expectedMtimeMs
-              const currentMtimeMs = statMtimeMs(path)
-              if (currentMtimeMs !== expected) {
-                sendJson(res, 409, { ok: false, error: 'conflict', currentMtimeMs })
-                return
-              }
-              writeFileAtomic(path, content)
+              // The mtime check and the write share one lock with py-mcp's
+              // append, so a write that landed while this request was in flight
+              // cannot slip in between them.
+              withWriteLock(dataDir, () => {
+                const currentMtimeMs = statMtimeMs(path)
+                if (currentMtimeMs !== expected) {
+                  const conflict = new Error('conflict')
+                  conflict.code = 'WRITE_CONFLICT'
+                  conflict.currentMtimeMs = currentMtimeMs
+                  throw conflict
+                }
+                writeFileAtomic(path, content)
+              })
               userEditedPending.add(target)
               sendJson(res, 200, { ok: true, mtimeMs: statMtimeMs(path) })
             } catch (error) {
-              sendJson(res, 400, { ok: false, error: error.message })
+              if (error.code === 'WRITE_CONFLICT') {
+                sendJson(res, 409, { ok: false, error: 'conflict', currentMtimeMs: error.currentMtimeMs })
+                return
+              }
+              sendJson(res, error.code === 'WRITE_LOCK_BUSY' ? 503 : 400, { ok: false, error: error.message })
             }
           })
           return

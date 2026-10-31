@@ -2,7 +2,7 @@
 // Runs with plain Node — no real Cordis/dsh host required, and never
 // touches the developer's real ~/.dsh-memory-journal directory.
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 
@@ -18,9 +18,15 @@ import {
   resolveEnabled,
   truncateKeepingHead,
   truncateKeepingTail,
+  withWriteLock,
 } from '../lib/index.js'
 
 const SEEDED_FILES = ['SOUL.md', 'USER.md', 'MEMORY.md']
+
+// Every default-directory resolution below must see a throwaway home, so the
+// legacy-migration check never reads the developer's real ~/.dsh-memory-journal.
+const fakeHome = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-home-'))
+process.env.HOME = fakeHome
 
 function addLocalDays(date, days) {
   const result = new Date(date.getFullYear(), date.getMonth(), date.getDate())
@@ -153,6 +159,9 @@ const weeklyDir = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
 const scopeDir = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
 const entriesDir = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
 const hostHomeDir = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
+let legacyHome
+let explicitDir
+let lockDir
 try {
   // Disabled scope: the section is registered but injects nothing.
   withDataDir(disabledDir, () => {})
@@ -247,6 +256,48 @@ try {
       `${file} should be seeded under the host-resolved home`)
   }
 
+  // Upgrading from before 0.1.0: files kept in ~/.dsh-memory-journal must
+  // follow the plugin into $DSH_HOME/storages, and the old directory must
+  // survive untouched.
+  legacyHome = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
+  const legacyRoot = join(legacyHome, '.dsh-memory-journal')
+  mkdirSync(join(legacyRoot, 'memory', '2026-10'), { recursive: true })
+  mkdirSync(join(legacyRoot, '.write.lock'))
+  writeFileSync(join(legacyRoot, 'SOUL.md'), '旧版本的人设', 'utf8')
+  writeFileSync(join(legacyRoot, 'memory', '2026-10', '2026-10-05.md'), '# 旧日记\n', 'utf8')
+  const savedHome = process.env.HOME
+  delete process.env.DSH_MEMORY_JOURNAL_DATA_DIR
+  process.env.HOME = legacyHome
+  const migratedCtx = makeFakeCtx()
+  await apply(migratedCtx, await validateConfig({ enabled: true }))
+  const migratedDir = join(legacyHome, '.dsh', 'storages', 'dsh-memory-journal')
+  assert.equal(readFileSync(join(migratedDir, 'SOUL.md'), 'utf8'), '旧版本的人设')
+  assert.ok(existsSync(join(migratedDir, 'memory', '2026-10', '2026-10-05.md')))
+  assert.ok(!existsSync(join(migratedDir, '.write.lock')), 'lock directories are not memory content')
+  assert.ok(migratedCtx.getSection().text().includes('旧版本的人设'), 'migrated content is injected')
+  assert.ok(existsSync(join(legacyRoot, 'SOUL.md')), 'the legacy directory stays intact')
+
+  // An explicit dataDir is a deliberate choice, so nothing is copied into it.
+  explicitDir = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
+  writeFileSync(join(legacyRoot, 'USER.md'), '旧版本的用户档案', 'utf8')
+  withDataDir(explicitDir, () => {})
+  await apply(makeFakeCtx(), await validateConfig({ enabled: true }))
+  assert.ok(!readFileSync(join(explicitDir, 'USER.md'), 'utf8').includes('旧版本'))
+  delete process.env.DSH_MEMORY_JOURNAL_DATA_DIR
+  process.env.HOME = savedHome
+
+  // A lock directory left behind by a crashed process is reclaimed instead of
+  // blocking every later save.
+  lockDir = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
+  const lockPath = join(lockDir, '.write.lock')
+  mkdirSync(lockPath)
+  const longAgo = new Date(Date.now() - 60_000)
+  utimesSync(lockPath, longAgo, longAgo)
+  let entered = false
+  withWriteLock(lockDir, () => { entered = true })
+  assert.equal(entered, true)
+  assert.ok(!existsSync(lockPath), 'the lock is released when the callback returns')
+
   // listDailyEntries/listWeeklyEntries: newest first, across multiple
   // months/years, and empty (not throwing) when memory/ does not exist yet.
   assert.deepEqual(listDailyEntries(entriesDir), [])
@@ -273,8 +324,8 @@ try {
   assert.deepEqual(weeklyEntries.map((entry) => entry.label), ['2026-W10', '2026-W01', '2025-W52'])
   assert.ok(weeklyEntries.every((entry) => typeof entry.mtimeMs === 'number'))
 } finally {
-  for (const dir of [disabledDir, enabledDir, soulKeepDir, nightDir, weeklyDir, scopeDir, entriesDir, hostHomeDir]) {
-    rmSync(dir, { recursive: true, force: true })
+  for (const dir of [disabledDir, enabledDir, soulKeepDir, nightDir, weeklyDir, scopeDir, entriesDir, hostHomeDir, legacyHome, explicitDir, lockDir, fakeHome]) {
+    if (dir) rmSync(dir, { recursive: true, force: true })
   }
   delete process.env.DSH_MEMORY_JOURNAL_DATA_DIR
 }

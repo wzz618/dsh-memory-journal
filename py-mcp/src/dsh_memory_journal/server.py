@@ -77,7 +77,7 @@ def memory_write(target: str, content: str, mode: str = "append") -> dict:
     """
     try:
         _store().write(target, content, mode)
-    except ValueError as error:
+    except (ValueError, TimeoutError) as error:
         raise ToolError(str(error)) from error
     return {"ok": True}
 

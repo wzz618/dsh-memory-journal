@@ -1,11 +1,15 @@
 """Offline tests for MemoryStore — no real MCP/dsh runtime required."""
 from __future__ import annotations
 
+import os
+import threading
+import time
 from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
 
+from dsh_memory_journal import store as store_module
 from dsh_memory_journal.store import MemoryStore
 
 
@@ -100,3 +104,103 @@ def test_weeks_missing_journal_reports_completed_week(store: MemoryStore) -> Non
 
     store.write(f"weekly:{label}", "补写的周记", mode="replace")
     assert label not in store.weeks_missing_journal()
+
+
+def _legacy_home(tmp_path: Path, monkeypatch) -> Path:
+    """Points Path.home() at a temp home holding a pre-0.1.0 data directory."""
+    home = tmp_path / "home"
+    legacy = home / ".dsh-memory-journal"
+    (legacy / "memory" / "2026-10").mkdir(parents=True)
+    (legacy / "SOUL.md").write_text("旧版本的人设", encoding="utf-8")
+    (legacy / "memory" / "2026-10" / "2026-10-05.md").write_text("# 旧日记\n", encoding="utf-8")
+    (legacy / ".write.lock").mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("DSH_MEMORY_JOURNAL_DATA_DIR", raising=False)
+    monkeypatch.delenv("DSH_HOME", raising=False)
+    return home
+
+
+def test_migrates_the_legacy_default_directory(tmp_path: Path, monkeypatch) -> None:
+    home = _legacy_home(tmp_path, monkeypatch)
+
+    store = MemoryStore()
+
+    assert store.data_dir == home / ".dsh" / "storages" / "dsh-memory-journal"
+    assert store.get("soul") == "旧版本的人设"
+    assert store.get("daily:2026-10-05") == "# 旧日记\n"
+    assert not (store.data_dir / ".write.lock").exists(), "lock directories are not memory content"
+    assert (home / ".dsh-memory-journal" / "SOUL.md").exists(), "the legacy directory stays intact"
+
+
+def test_migration_never_overwrites_existing_files(tmp_path: Path, monkeypatch) -> None:
+    home = _legacy_home(tmp_path, monkeypatch)
+    target = home / ".dsh" / "storages" / "dsh-memory-journal"
+    target.mkdir(parents=True)
+    (target / "SOUL.md").write_text("新版本已经有的内容", encoding="utf-8")
+
+    store = MemoryStore()
+
+    assert store.get("soul") == "新版本已经有的内容"
+    assert store.get("daily:2026-10-05") == "# 旧日记\n"
+
+
+def test_explicit_data_dir_is_not_migrated(tmp_path: Path, monkeypatch) -> None:
+    _legacy_home(tmp_path, monkeypatch)
+
+    store = MemoryStore(data_dir=tmp_path / "explicit")
+
+    assert "旧版本的人设" not in store.get("soul")
+
+
+def test_env_override_is_not_migrated(tmp_path: Path, monkeypatch) -> None:
+    _legacy_home(tmp_path, monkeypatch)
+    override = tmp_path / "override"
+    monkeypatch.setenv("DSH_MEMORY_JOURNAL_DATA_DIR", str(override))
+
+    store = MemoryStore()
+
+    assert store.data_dir == override.resolve()
+    assert "旧版本的人设" not in store.get("soul")
+
+
+def test_concurrent_appends_keep_every_line(store: MemoryStore) -> None:
+    def worker(tag: str) -> None:
+        for index in range(5):
+            store.write("memory", f"{tag}-{index}")
+
+    threads = [threading.Thread(target=worker, args=(f"t{number}",)) for number in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    content = store.get("memory")
+    missing = [
+        f"t{number}-{index}"
+        for number in range(8)
+        for index in range(5)
+        if f"t{number}-{index}" not in content
+    ]
+    assert missing == []
+
+
+def test_stale_write_lock_is_reclaimed(store: MemoryStore) -> None:
+    lock = store.data_dir / ".write.lock"
+    lock.mkdir()
+    stale = time.time() - 60
+    os.utime(lock, (stale, stale))
+
+    store.write("memory", "仍然能写")
+
+    assert "仍然能写" in store.get("memory")
+    assert not lock.exists()
+
+
+def test_busy_write_lock_reports_a_readable_error(store: MemoryStore, monkeypatch) -> None:
+    monkeypatch.setattr(store_module, "_LOCK_WAIT_SECONDS", 0.05)
+    (store.data_dir / ".write.lock").mkdir()
+
+    with pytest.raises(TimeoutError) as caught:
+        store.write("memory", "x")
+
+    assert "请稍后重试" in str(caught.value)

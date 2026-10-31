@@ -21,6 +21,10 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
+import sys
+import time
+from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
 
@@ -35,18 +39,92 @@ _WEEKLY_TARGET = re.compile(r"weekly:(\d{4})-W(\d{2})")
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 _SEEDED_FILES = ("SOUL.md", "USER.md", "MEMORY.md")
 
+# Shared with the js-shell half, which creates the same directory. Appends are
+# read-modify-write of the whole file, so without one lock an append racing a
+# settings-page save (or another process's append) silently drops a line.
+_LOCK_DIRNAME = ".write.lock"
+_LOCK_STALE_SECONDS = 30.0
+_LOCK_WAIT_SECONDS = 1.0
+_LOCK_RETRY_SECONDS = 0.01
+
+# The default directory before the plugin stored data under $DSH_HOME.
+_LEGACY_DIRNAME = ".dsh-memory-journal"
+
 
 def resolve_data_dir() -> Path:
     override = os.environ.get("DSH_MEMORY_JOURNAL_DATA_DIR")
     if override and override.strip():
-        return Path(override).expanduser()
+        return Path(override).expanduser().resolve()
     # Same "$DSH_HOME/storages/<plugin>" layout dsh-persona-dafeiyu uses for
     # its own data, so every DSH plugin's files sit together under one home.
     # A blank DSH_HOME counts as unset, matching @deepseek-ai/dsh-home-paths'
     # resolveDshHome in the host half.
     dsh_home = os.environ.get("DSH_HOME")
     home = Path(dsh_home).expanduser() if dsh_home and dsh_home.strip() else Path.home() / ".dsh"
-    return home / "storages" / "dsh-memory-journal"
+    return (home / "storages" / "dsh-memory-journal").resolve()
+
+
+def _uses_default_data_dir() -> bool:
+    override = os.environ.get("DSH_MEMORY_JOURNAL_DATA_DIR")
+    return not (override and override.strip())
+
+
+def _migrate_legacy_dir(target: Path) -> None:
+    """Copies files from the pre-0.1.0 default directory into the resolved one,
+    skipping anything that already exists there. Copy, never move: without this
+    an upgrade silently starts a fresh memory directory and the old diaries
+    look lost, and the old directory stays intact for the user to inspect."""
+    legacy = Path.home() / _LEGACY_DIRNAME
+    if not legacy.is_dir() or legacy.resolve() == target.resolve():
+        return
+    copied = 0
+    for source in sorted(legacy.rglob("*")):
+        relative = source.relative_to(legacy)
+        if not source.is_file() or any(part.startswith(".") for part in relative.parts):
+            continue
+        destination = target / relative
+        if destination.exists():
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        copied += 1
+    if copied:
+        # stdout carries the MCP protocol; diagnostics belong on stderr.
+        print(f"dsh-memory-journal: copied {copied} file(s) from {legacy} to {target}", file=sys.stderr)
+
+
+@contextmanager
+def _write_lock(data_dir: Path):
+    """Cross-process, cross-language write lock (the js-shell half takes the
+    same directory around its settings-page save)."""
+    data_dir.mkdir(parents=True, exist_ok=True)
+    lock = data_dir / _LOCK_DIRNAME
+    deadline = time.monotonic() + _LOCK_WAIT_SECONDS
+    while True:
+        try:
+            lock.mkdir()
+            break
+        except FileExistsError:
+            try:
+                stale = time.time() - lock.stat().st_mtime > _LOCK_STALE_SECONDS
+            except FileNotFoundError:
+                continue  # released between the failed mkdir and the stat
+            if stale:
+                try:
+                    lock.rmdir()
+                except OSError:
+                    pass  # another waiter removed it first; retry decides
+                continue
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"另一个进程正在写入记忆文件（{lock}），请稍后重试") from None
+            time.sleep(_LOCK_RETRY_SECONDS)
+    try:
+        yield
+    finally:
+        try:
+            lock.rmdir()
+        except OSError:
+            pass
 
 
 def _write_atomic(path: Path, content: str) -> None:
@@ -77,7 +155,12 @@ class MemoryStore:
     """Reads and writes the Markdown memory files for one data directory."""
 
     def __init__(self, data_dir: Path | None = None) -> None:
-        self.data_dir = data_dir or resolve_data_dir()
+        if data_dir is None:
+            self.data_dir = resolve_data_dir()
+            if _uses_default_data_dir():
+                _migrate_legacy_dir(self.data_dir)
+        else:
+            self.data_dir = data_dir
         self._seed_files_if_missing()
 
     def _seed_files_if_missing(self) -> None:
@@ -144,12 +227,13 @@ class MemoryStore:
 
     def write(self, target: str, content: str, mode: str = "append") -> None:
         path = self._resolve_target_path(target)
-        if mode == "append":
-            _append(path, content)
-        elif mode == "replace":
-            _write_atomic(path, content)
-        else:
+        if mode not in ("append", "replace"):
             raise ValueError(f"unknown write mode: {mode!r} (expected 'append' or 'replace')")
+        with _write_lock(self.data_dir):
+            if mode == "append":
+                _append(path, content)
+            else:
+                _write_atomic(path, content)
 
     def search(self, query: str) -> list[dict]:
         needle = query.strip().lower()
