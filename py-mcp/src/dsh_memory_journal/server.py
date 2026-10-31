@@ -63,15 +63,17 @@ def memory_write(target: str, content: str, mode: str = "append") -> dict:
     调用时机：
     - 用户明确要求"记住"某事时，写入 target="memory"。
     - 每天晚上（如果还没写过今天的日记）：先用 memory_get(target="daily")
-      确认还没写，再把今天发生的事写成日记追加到 target="daily"（格式见
-      examples/diary.example.md），同时把其中值得长期记住的条目另外用
+      确认还没写，再把今天发生的事按"## 日期/主题 + 要点"的短条形式写进
+      target="daily"，同时把其中值得长期记住的条目另外用
       target="memory" 追加一份——这两步是同一个晚上的流程，不要只做一半。
     - 每周（如果还没写过上周的周记）：先用 memory_get(target="weekly:YYYY-Www")
       读一遍该周每天的日记，再用 mode="replace" 写一份周记到
       target="weekly:YYYY-Www"。
 
-    mode 为 "append"（默认，追加一行/一段）或 "replace"（整篇覆盖，通常用于
-    写周记全文）。
+    mode 为 "append"（默认，追加一行/一段）或 "replace"（整篇覆盖）。replace
+    只支持 target="soul" 和周记：这两处整篇重写是正常用法，而 user/memory/
+    日记是累积的，整篇覆盖会丢掉没被一并写回去的内容，所以对它们调用 replace
+    会直接报错。
 
     target 或 mode 写错时，工具会返回一条列出合法取值的错误信息。
     """

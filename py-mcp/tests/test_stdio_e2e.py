@@ -66,6 +66,15 @@ async def call_tools(data_dir: Path):
             assert bad_mode.is_error is True
             assert "append" in text_of(bad_mode)
 
+            blind_replace = await session.call_tool(
+                "memory_write", {"target": "memory", "content": "整篇覆盖", "mode": "replace"}
+            )
+            assert blind_replace.is_error is True
+            assert "append" in text_of(blind_replace)
+            kept = await session.call_tool("memory_search", {"query": "拿铁"})
+            assert "用户喜欢喝拿铁" in text_of(kept), "a rejected replace must not touch the file"
+
 
 def test_server_over_stdio(tmp_path: Path) -> None:
-    asyncio.run(call_tools(tmp_path))
+    # A directory that does not exist yet, so the starter files are seeded.
+    asyncio.run(call_tools(tmp_path / "data"))

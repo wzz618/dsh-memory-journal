@@ -15,7 +15,8 @@ from dsh_memory_journal.store import MemoryStore
 
 @pytest.fixture
 def store(tmp_path: Path) -> MemoryStore:
-    return MemoryStore(data_dir=tmp_path)
+    # A directory that does not exist yet, so the starter content is seeded.
+    return MemoryStore(data_dir=tmp_path / "data")
 
 
 def test_seeds_all_three_files_on_first_use(store: MemoryStore) -> None:
@@ -24,12 +25,24 @@ def test_seeds_all_three_files_on_first_use(store: MemoryStore) -> None:
     assert "长期记忆" in store.get("memory")
 
 
-def test_seed_never_overwrites_existing_content(tmp_path: Path) -> None:
-    (tmp_path / "SOUL.md").write_text("已经有真实人设了", encoding="utf-8")
-    store = MemoryStore(data_dir=tmp_path)
+def test_existing_directory_is_never_seeded(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "SOUL.md").write_text("已经有真实人设了", encoding="utf-8")
+    store = MemoryStore(data_dir=data_dir)
     assert store.get("soul") == "已经有真实人设了"
-    # USER.md/MEMORY.md still get their own starter content independently.
-    assert "用户档案" in store.get("user")
+    # Nothing is topped up either: a file deleted on purpose stays deleted.
+    assert store.get("user") == ""
+
+
+def test_deleted_file_is_not_recreated(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    MemoryStore(data_dir=data_dir).write("memory", "用户喜欢喝拿铁")
+    (data_dir / "MEMORY.md").unlink()
+
+    reopened = MemoryStore(data_dir=data_dir)
+
+    assert reopened.get("memory") == ""
 
 
 def test_write_and_get_memory_appends(store: MemoryStore) -> None:
@@ -40,10 +53,39 @@ def test_write_and_get_memory_appends(store: MemoryStore) -> None:
     assert "用户的生日是 3 月 5 日" in content
 
 
-def test_write_replace_overwrites(store: MemoryStore) -> None:
-    store.write("memory", "第一行")
-    store.write("memory", "整体替换", mode="replace")
-    assert store.get("memory").strip() == "整体替换"
+def test_write_replace_overwrites_weekly_journal(store: MemoryStore) -> None:
+    store.write("weekly", "第一行", mode="replace")
+    store.write("weekly", "整体替换", mode="replace")
+    assert store.get("weekly").strip() == "整体替换"
+
+
+def test_write_replace_allowed_for_soul(store: MemoryStore) -> None:
+    store.write("soul", "新的人设", mode="replace")
+    assert store.get("soul") == "新的人设"
+
+
+@pytest.mark.parametrize("target", ["user", "memory", "daily", "daily:2026-01-15"])
+def test_replace_rejected_for_append_only_targets(store: MemoryStore, target: str) -> None:
+    store.write(target, "原有内容")
+
+    with pytest.raises(ValueError) as caught:
+        store.write(target, "整篇覆盖", mode="replace")
+
+    assert "append" in str(caught.value)
+    assert "原有内容" in store.get(target)
+
+
+def test_write_follows_a_symlinked_file(store: MemoryStore, tmp_path: Path) -> None:
+    real_file = tmp_path / "real-memory.md"
+    real_file.write_text("原有内容\n", encoding="utf-8")
+    link = store.data_dir / "MEMORY.md"
+    link.unlink()
+    link.symlink_to(real_file)
+
+    store.write("memory", "追加的一行")
+
+    assert link.is_symlink(), "the symlink survives the write"
+    assert "追加的一行" in real_file.read_text(encoding="utf-8")
 
 
 def test_write_unknown_mode_rejected(store: MemoryStore) -> None:

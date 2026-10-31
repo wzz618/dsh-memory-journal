@@ -41,8 +41,9 @@ Cordis 的 in-process 里（`ctx.systemPrompt`、`ctx.webServer`），而"模型
    └─ weekly/2026-W43.md        # 周记
 ```
 
-全部是纯 Markdown，可以直接打开编辑。`SOUL.md`/`USER.md`/`MEMORY.md` 在
-插件挂载的那一刻就生成起始内容，不是等到第一次读取才惰性创建。`SOUL.md`
+全部是纯 Markdown，可以直接打开编辑。`SOUL.md`/`USER.md`/`MEMORY.md` 只在
+数据目录本身是新建的时候生成起始内容，不是每次启动都补：删掉其中某个文件
+就是真的删掉了，已存在的目录也不会被补种。`SOUL.md`
 的默认人设改编自
 [dsh-persona-dafeiyu](https://github.com/huaizhuanghub/dsh-persona-dafeiyu)
 插件（MIT 协议）。

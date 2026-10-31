@@ -22,7 +22,9 @@ pip install dsh-memory-journal
 这些工具——具体 `target` 取值（`soul`、`user`、`memory`、`daily`、
 `daily:YYYY-MM-DD`、`weekly`、`weekly:YYYY-Www`）见每个工具自己的
 docstring。`target` 或 `mode` 写错时会返回一条列出合法取值的错误信息，
-模型不用靠猜就能改正。
+模型不用靠猜就能改正。`mode="replace"` 只对 `soul` 和周记开放：`user`、
+`memory` 和日记是累积的，整篇覆盖会丢掉没被一并写回去的内容，因此只允许
+追加。
 
 这个包和 js-shell 必须通过 `DSH_MEMORY_JOURNAL_DATA_DIR`（默认
 `~/.dsh/storages/dsh-memory-journal`，在 `$DSH_HOME` 下）指向同一个目录。

@@ -2,7 +2,7 @@
 // Runs with plain Node — no real Cordis/dsh host required, and never
 // touches the developer's real ~/.dsh-memory-journal directory.
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 
@@ -17,8 +17,10 @@ import {
   resolveDataDir,
   resolveEnabled,
   truncateKeepingHead,
+  targetPath,
   truncateKeepingTail,
   withWriteLock,
+  writeFileAtomic,
 } from '../lib/index.js'
 
 const SEEDED_FILES = ['SOUL.md', 'USER.md', 'MEMORY.md']
@@ -163,8 +165,12 @@ let legacyHome
 let explicitDir
 let lockDir
 try {
+  // Seeding only happens for a directory that does not exist yet, so each
+  // scenario points at a fresh subdirectory of its own temp root.
+  const dataOf = (root) => join(root, 'data')
+
   // Disabled scope: the section is registered but injects nothing.
-  withDataDir(disabledDir, () => {})
+  withDataDir(dataOf(disabledDir), () => {})
   const disabledConfig = await validateConfig({ enabled: false })
   const disabledCtx = makeFakeCtx()
   await apply(disabledCtx, disabledConfig)
@@ -174,11 +180,11 @@ try {
   // Seeding happens even for a disabled scope — it's a directory concern,
   // not an injection concern.
   for (const file of SEEDED_FILES) {
-    assert.ok(readFileSync(join(disabledDir, file), 'utf8').length > 0, `${file} should be seeded even when disabled`)
+    assert.ok(readFileSync(join(dataOf(disabledDir), file), 'utf8').length > 0, `${file} should be seeded even when disabled`)
   }
 
   // Enabled scope: all three files get seeded with real content and injected.
-  withDataDir(enabledDir, () => {})
+  withDataDir(dataOf(enabledDir), () => {})
   const enabledConfig = await validateConfig({ enabled: true, injectionBudgetChars: 4000 })
   const enabledCtx = makeFakeCtx()
   await apply(enabledCtx, enabledConfig)
@@ -187,42 +193,45 @@ try {
   assert.ok(text.includes('大肥鱼'), 'injected text should include the seeded SOUL.md persona')
   assert.ok(text.includes('仅当用户明确要求'))
   for (const file of SEEDED_FILES) {
-    assert.ok(readFileSync(join(enabledDir, file), 'utf8').length > 0)
+    assert.ok(readFileSync(join(dataOf(enabledDir), file), 'utf8').length > 0)
   }
 
-  // Seeding never overwrites a file that already has real content.
-  writeFileSync(join(soulKeepDir, 'SOUL.md'), '已经有真实人设了', 'utf8')
-  withDataDir(soulKeepDir, () => {})
+  // An existing data directory is never seeded: a file someone deleted stays
+  // deleted, and a hand-written SOUL.md is not replaced by the template.
+  mkdirSync(dataOf(soulKeepDir), { recursive: true })
+  writeFileSync(join(dataOf(soulKeepDir), 'SOUL.md'), '已经有真实人设了', 'utf8')
+  withDataDir(dataOf(soulKeepDir), () => {})
   await apply(makeFakeCtx(), await validateConfig({ enabled: true }))
-  assert.equal(readFileSync(join(soulKeepDir, 'SOUL.md'), 'utf8'), '已经有真实人设了')
+  assert.equal(readFileSync(join(dataOf(soulKeepDir), 'SOUL.md'), 'utf8'), '已经有真实人设了')
+  assert.ok(!existsSync(join(dataOf(soulKeepDir), 'USER.md')), 'an existing directory is not topped up')
 
   // Night nudge: nightHour: 0 makes "now.getHours() >= nightHour" always
   // true, so this is deterministic regardless of when the test actually
   // runs. No diary written yet today -> nudge appears.
-  withDataDir(nightDir, () => {})
+  withDataDir(dataOf(nightDir), () => {})
   const nightCtx = makeFakeCtx()
   await apply(nightCtx, await validateConfig({ enabled: true, nightHour: 0 }))
   assert.ok(nightCtx.getSection().text().includes('还没有写日记'))
 
   // Once today's diary file exists, the nudge stops.
-  mkdirSync(dirname(dailyFilePath(nightDir, new Date())), { recursive: true })
-  writeFileSync(dailyFilePath(nightDir, new Date()), '# 今天\n', 'utf8')
+  mkdirSync(dirname(dailyFilePath(dataOf(nightDir), new Date())), { recursive: true })
+  writeFileSync(dailyFilePath(dataOf(nightDir), new Date()), '# 今天\n', 'utf8')
   assert.ok(!nightCtx.getSection().text().includes('还没有写日记'))
 
   // Weekly nudge: a daily note exists for a completed ISO week with no
   // weekly journal yet -> nudge appears, keyed off that week's label.
-  withDataDir(weeklyDir, () => {})
+  withDataDir(dataOf(weeklyDir), () => {})
   const weeklyCtx = makeFakeCtx()
   await apply(weeklyCtx, await validateConfig({ enabled: true }))
   const lastWeek = previousIsoWeek(new Date())
   const lastWeekLabel = `${lastWeek.isoYear}-W${String(lastWeek.isoWeek).padStart(2, '0')}`
   const aDayLastWeek = mondayOfIsoWeekForTest(lastWeek.isoYear, lastWeek.isoWeek)
-  mkdirSync(dirname(dailyFilePath(weeklyDir, aDayLastWeek)), { recursive: true })
-  writeFileSync(dailyFilePath(weeklyDir, aDayLastWeek), '# 上周某一天\n', 'utf8')
+  mkdirSync(dirname(dailyFilePath(dataOf(weeklyDir), aDayLastWeek)), { recursive: true })
+  writeFileSync(dailyFilePath(dataOf(weeklyDir), aDayLastWeek), '# 上周某一天\n', 'utf8')
   assert.ok(weeklyCtx.getSection().text().includes(`${lastWeekLabel} 这一周还没有写周记`))
 
   // Once that week's journal file exists, the nudge stops.
-  const weeklyFilePath = join(weeklyDir, 'memory', 'weekly', `${lastWeekLabel}.md`)
+  const weeklyFilePath = join(dataOf(weeklyDir), 'memory', 'weekly', `${lastWeekLabel}.md`)
   mkdirSync(dirname(weeklyFilePath), { recursive: true })
   writeFileSync(weeklyFilePath, '# 周记\n', 'utf8')
   assert.ok(!weeklyCtx.getSection().text().includes('这一周还没有写周记'))
@@ -230,13 +239,13 @@ try {
   // scopes.json wins over config.enabled once it exists: pre-seed a session
   // override before apply() ever runs, so seedScopesIfMissing must not
   // clobber it even though config.enabled says the opposite.
-  mkdirSync(scopeDir, { recursive: true })
+  mkdirSync(dataOf(scopeDir), { recursive: true })
   writeFileSync(
-    join(scopeDir, 'scopes.json'),
+    join(dataOf(scopeDir), 'scopes.json'),
     JSON.stringify({ global: false, workspace: {}, session: { 'session-a': true } }),
     'utf8',
   )
-  withDataDir(scopeDir, () => {})
+  withDataDir(dataOf(scopeDir), () => {})
   const scopeCtx = makeFakeCtx()
   await apply(scopeCtx, await validateConfig({ enabled: false }))
   const scopedText = scopeCtx.getSection().text
@@ -280,9 +289,9 @@ try {
   // An explicit dataDir is a deliberate choice, so nothing is copied into it.
   explicitDir = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
   writeFileSync(join(legacyRoot, 'USER.md'), '旧版本的用户档案', 'utf8')
-  withDataDir(explicitDir, () => {})
+  withDataDir(dataOf(explicitDir), () => {})
   await apply(makeFakeCtx(), await validateConfig({ enabled: true }))
-  assert.ok(!readFileSync(join(explicitDir, 'USER.md'), 'utf8').includes('旧版本'))
+  assert.ok(!readFileSync(join(dataOf(explicitDir), 'USER.md'), 'utf8').includes('旧版本'))
   delete process.env.DSH_MEMORY_JOURNAL_DATA_DIR
   process.env.HOME = savedHome
 
@@ -297,6 +306,29 @@ try {
   withWriteLock(lockDir, () => { entered = true })
   assert.equal(entered, true)
   assert.ok(!existsSync(lockPath), 'the lock is released when the callback returns')
+
+  // targetPath rejects impossible dates and ISO weeks instead of normalizing
+  // them into some other entry, matching py-mcp's MemoryStore.
+  assert.ok(targetPath('/data', 'soul'))
+  assert.equal(targetPath('/data', 'not-a-target'), null)
+  assert.equal(targetPath('/data', 'daily:2026-02-30'), null)
+  assert.equal(targetPath('/data', 'daily:2026-13-40'), null)
+  assert.equal(targetPath('/data', 'weekly:2026-W00'), null)
+  assert.equal(targetPath('/data', 'weekly:2026-W99'), null)
+  assert.ok(targetPath('/data', 'daily:2026-10-05'))
+  assert.ok(targetPath('/data', 'weekly:2026-W43'))
+
+  // Saving over a symlinked memory file keeps the link: the replacement names
+  // the file it points at, so a dotfiles-style link survives.
+  const linkRoot = mkdtempSync(join(tmpdir(), 'dsh-memory-journal-test-'))
+  const realFile = join(linkRoot, 'real-memory.md')
+  const linkedFile = join(linkRoot, 'MEMORY.md')
+  writeFileSync(realFile, '原有内容\n', 'utf8')
+  symlinkSync(realFile, linkedFile)
+  writeFileAtomic(linkedFile, '替换内容\n')
+  assert.ok(lstatSync(linkedFile).isSymbolicLink(), 'the symlink is still a symlink')
+  assert.equal(readFileSync(realFile, 'utf8'), '替换内容\n')
+  rmSync(linkRoot, { recursive: true, force: true })
 
   // listDailyEntries/listWeeklyEntries: newest first, across multiple
   // months/years, and empty (not throwing) when memory/ does not exist yet.

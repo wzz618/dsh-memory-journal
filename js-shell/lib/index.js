@@ -27,6 +27,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmdirSync,
   statSync,
@@ -274,19 +275,30 @@ function statMtimeMs(path) {
   }
 }
 
-function writeFileAtomic(path, content) {
-  mkdirSync(dirname(path), { recursive: true })
-  const tmp = `${path}.tmp-${process.pid}-${Date.now()}`
+/** Writes atomically (temp file + rename), preserving a symlink at `path` by
+ * writing to what it points at. Exported for the offline verification. */
+export function writeFileAtomic(path, content) {
+  // Writing through a symlink keeps the link: resolve it first so the
+  // replacement names the file it points at, not the link itself.
+  let target = path
+  try {
+    target = realpathSync(path)
+  } catch {
+    // Not a symlink, or not created yet — write where we were asked to.
+  }
+  mkdirSync(dirname(target), { recursive: true })
+  const tmp = `${target}.tmp-${process.pid}-${Date.now()}`
   writeFileSync(tmp, content, 'utf8')
-  renameSync(tmp, path)
+  renameSync(tmp, target)
 }
 
-/** Creates SOUL.md/USER.md/MEMORY.md with starter content as soon as this
- * plugin is mounted (not lazily on first read) — so they show up in the
- * data directory, and through the /file API, right after install. Each
- * file's starter content is read from templates/<file> next to this
- * package, not embedded as a string literal. Never overwrites a file that
- * already exists. */
+/** Creates SOUL.md/USER.md/MEMORY.md with starter content for a data
+ * directory that does not exist yet (not lazily on first read) — so they show
+ * up in the data directory, and through the /file API, right after install.
+ * Each file's starter content is read from templates/<file> next to this
+ * package, not embedded as a string literal. Never runs for a directory that
+ * already exists, and never overwrites a file that does: a file someone
+ * deleted on purpose stays deleted. */
 function seedFilesIfMissing(dataDir) {
   for (const file of TRACKED_FILES) {
     const path = join(dataDir, file)
@@ -409,19 +421,30 @@ function anyDailyNoteExistsInIsoWeek(dataDir, isoYear, isoWeek) {
   return false
 }
 
-/** Resolves an API target string to its file path on disk, or `null` for an
- * unrecognized target. Shared by the /file and /entries handlers so the two
- * endpoints can never disagree about where a target lives. */
-function targetPath(dataDir, target) {
+/** Resolves an API target string to its file path on disk, or `null` when the
+ * target is not one this plugin owns. Shared by the /file and /entries
+ * handlers so the two endpoints can never disagree about where a target lives.
+ * A well-formed but impossible date or ISO week (2026-13-40, 2026-W99) is
+ * null too, matching py-mcp's MemoryStore, which rejects those instead of
+ * writing an entry under a normalized date. */
+export function targetPath(dataDir, target) {
   if (typeof target !== 'string') return null
   if (Object.hasOwn(SIMPLE_TARGETS, target)) return join(dataDir, SIMPLE_TARGETS[target])
   const daily = /^daily:(\d{4})-(\d{2})-(\d{2})$/.exec(target)
   if (daily) {
-    const [, year, month, day] = daily
-    return dailyPath(dataDir, new Date(Number(year), Number(month) - 1, Number(day)))
+    const year = Number(daily[1])
+    const month = Number(daily[2])
+    const day = Number(daily[3])
+    const date = new Date(year, month - 1, day)
+    const roundTrips = date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day
+    return roundTrips ? dailyPath(dataDir, date) : null
   }
   const weekly = /^weekly:(\d{4})-W(\d{2})$/.exec(target)
-  if (weekly) return weeklyPath(dataDir, Number(weekly[1]), Number(weekly[2]))
+  if (weekly) {
+    const isoWeek = Number(weekly[2])
+    if (isoWeek < 1 || isoWeek > 53) return null
+    return weeklyPath(dataDir, Number(weekly[1]), isoWeek)
+  }
   return null
 }
 
@@ -522,8 +545,9 @@ export async function apply(ctx, config) {
   // hand-composed test context may not, so read it through ctx.get.
   const dshHomePath = typeof ctx.get === 'function' ? ctx.get('dshHomePath') : undefined
   const dataDir = resolveDataDir(config, dshHomePath)
+  const firstRun = !existsSync(dataDir)
   if (usesDefaultDataDir(config)) migrateLegacyDataDir(dataDir)
-  seedFilesIfMissing(dataDir)
+  if (firstRun) seedFilesIfMissing(dataDir)
   seedScopesIfMissing(dataDir, config)
   const userEditedPending = new Set()
 

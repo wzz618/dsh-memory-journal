@@ -39,6 +39,13 @@ _WEEKLY_TARGET = re.compile(r"weekly:(\d{4})-W(\d{2})")
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 _SEEDED_FILES = ("SOUL.md", "USER.md", "MEMORY.md")
 
+# Targets a wholesale rewrite is meaningful for: the persona is meant to be
+# rewritten as it evolves, and a weekly journal is written in one pass. The
+# others grow by appending, where a blind `replace` silently drops whatever
+# the model did not reproduce.
+_REPLACEABLE_TARGETS = frozenset({"soul", "weekly"})
+_REPLACEABLE_PATTERN = re.compile(r"weekly:\d{4}-W\d{2}")
+
 # Shared with the js-shell half, which creates the same directory. Appends are
 # read-modify-write of the whole file, so without one lock an append racing a
 # settings-page save (or another process's append) silently drops a line.
@@ -128,6 +135,9 @@ def _write_lock(data_dir: Path):
 
 
 def _write_atomic(path: Path, content: str) -> None:
+    # Writing through a symlink keeps the link: the replacement names the file
+    # the link points at, not the link itself.
+    path = path.resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + f".tmp-{os.getpid()}")
     tmp.write_text(content, encoding="utf-8")
@@ -151,23 +161,33 @@ def _iso_week_label(iso_year: int, iso_week: int) -> str:
     return f"{iso_year:04d}-W{iso_week:02d}"
 
 
+def _is_replaceable(target: str) -> bool:
+    return target in _REPLACEABLE_TARGETS or _REPLACEABLE_PATTERN.fullmatch(target) is not None
+
+
 class MemoryStore:
     """Reads and writes the Markdown memory files for one data directory."""
 
     def __init__(self, data_dir: Path | None = None) -> None:
         if data_dir is None:
             self.data_dir = resolve_data_dir()
+            first_run = not self.data_dir.exists()
             if _uses_default_data_dir():
                 _migrate_legacy_dir(self.data_dir)
         else:
             self.data_dir = data_dir
-        self._seed_files_if_missing()
+            first_run = not self.data_dir.exists()
+        # Only a directory that did not exist yet gets starter content: a file
+        # the user deleted on purpose stays deleted.
+        if first_run:
+            self._seed_files_if_missing()
 
     def _seed_files_if_missing(self) -> None:
-        """Writes SOUL.md/USER.md/MEMORY.md with starter content as soon as
-        this data directory is seen (not lazily on first read), reading each
-        file's template from templates/<file> next to this module. Never
-        overwrites a file that already exists."""
+        """Writes SOUL.md/USER.md/MEMORY.md with starter content for a data
+        directory that does not exist yet, reading each file's template from
+        templates/<file> next to this module. Never overwrites a file that
+        already exists, and an existing directory is never topped up — a file
+        deleted on purpose stays deleted."""
         for name in _SEEDED_FILES:
             path = self.data_dir / name
             if not path.exists():
@@ -229,6 +249,12 @@ class MemoryStore:
         path = self._resolve_target_path(target)
         if mode not in ("append", "replace"):
             raise ValueError(f"unknown write mode: {mode!r} (expected 'append' or 'replace')")
+        if mode == "replace" and not _is_replaceable(target):
+            raise ValueError(
+                f"target {target!r} only supports mode='append'; mode='replace' is for "
+                "'soul' and weekly journals, so rewriting it wholesale would drop "
+                "content the caller did not carry over"
+            )
         with _write_lock(self.data_dir):
             if mode == "append":
                 _append(path, content)

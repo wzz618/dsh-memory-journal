@@ -49,8 +49,9 @@ depend on each other's runtime.
 ```
 
 All plain Markdown — open and edit directly. `SOUL.md`/`USER.md`/`MEMORY.md`
-are created with starter content the moment the plugin is mounted, not
-lazily. `SOUL.md`'s default persona is adapted from the
+are created with starter content when the data directory itself is created,
+not on every start: deleting one of them is permanent, and an existing
+directory is never topped up. `SOUL.md`'s default persona is adapted from the
 [dsh-persona-dafeiyu](https://github.com/huaizhuanghub/dsh-persona-dafeiyu)
 plugin (MIT License).
 

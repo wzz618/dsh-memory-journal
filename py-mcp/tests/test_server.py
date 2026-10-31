@@ -8,8 +8,9 @@ from dsh_memory_journal import server
 
 @pytest.fixture(autouse=True)
 def isolated_store(tmp_path, monkeypatch):
-    """Points the lazy store at a throwaway directory for every test."""
-    monkeypatch.setenv("DSH_MEMORY_JOURNAL_DATA_DIR", str(tmp_path))
+    """Points the lazy store at a throwaway directory for every test. The
+    directory must not exist yet, or the starter files are not seeded."""
+    monkeypatch.setenv("DSH_MEMORY_JOURNAL_DATA_DIR", str(tmp_path / "data"))
     server._store.cache_clear()
     yield
     server._store.cache_clear()
